@@ -10,7 +10,6 @@ export interface TailOptions {
     separator?: string | RegExp | null;
     fsWatchOptions?: FSWatchOptions;
     follow?: boolean;
-    logger?: DevNull;
     useWatchFile?: boolean;
     flushAtEOF?: boolean;
     encoding?: BufferEncoding;
@@ -27,18 +26,12 @@ interface Cursor {
     size: number;
 }
 
-class DevNull {
-    info(...args: any) { }
-    error(...args: any) { }
-}
-
 export class Tail extends EventEmitter {
     #filename: string;
     #absPath: string;
     #separator?: string | RegExp | null;
     #fsWatchOptions: any;
     #follow: boolean;
-    #logger: DevNull;
     #useWatchFile: boolean;
     #flushAtEOF: boolean;
     #encoding: BufferEncoding;
@@ -59,16 +52,11 @@ export class Tail extends EventEmitter {
             options.separator !== undefined ? options.separator : /[\r]{0,1}\n/; // null is a valid param
         this.#fsWatchOptions = options.fsWatchOptions || {};
         this.#follow = options.follow ?? true;
-        this.#logger = options.logger || new DevNull();
         this.#useWatchFile = options.useWatchFile || false;
         this.#flushAtEOF = options.flushAtEOF || false;
         this.#encoding = options.encoding || 'utf-8';
         const fromBeginning = options.fromBeginning || false;
         this.#nLines = options.nLines ?? 0;
-
-        this.#logger.info(`Tail starting...`);
-        this.#logger.info(`filename: ${this.#filename}`);
-        this.#logger.info(`encoding: ${this.#encoding}`);
 
         try {
             fs.accessSync(this.#filename, fs.constants.F_OK);
@@ -89,7 +77,6 @@ export class Tail extends EventEmitter {
 
         let cursor;
 
-        this.#logger.info(`fromBeginning: ${fromBeginning}`);
         if (fromBeginning) {
             cursor = 0;
         } else if (this.#nLines <= 0) {
@@ -106,7 +93,6 @@ export class Tail extends EventEmitter {
         try {
             this.watch(cursor, flush);
         } catch (err) {
-            this.#logger.error(`watch for ${this.#filename} failed: ${err}`);
             this.emit('error', `watch for ${this.#filename} failed: ${err}`);
         }
     }
@@ -245,11 +231,7 @@ export class Tail extends EventEmitter {
         try {
             return fs.statSync(this.#filename).size;
         } catch (err) {
-            this.#logger.error(`size check for ${this.#filename} failed: ${err}`);
-            this.emit(
-                'error',
-                `size check for ${this.#filename} failed: ${err}`
-            );
+            this.emit('error', `size check for ${this.#filename} failed: ${err}`);
             throw err;
         }
     }
@@ -264,7 +246,6 @@ export class Tail extends EventEmitter {
                     encoding: this.#encoding,
                 });
                 stream.on('error', (error) => {
-                    this.#logger.error(`Tail error: ${error}`);
                     this.emit('error', error);
                 });
                 stream.on('end', () => {
@@ -311,8 +292,6 @@ export class Tail extends EventEmitter {
 
     watch(startingCursor: number, flush?: boolean) {
         if (this.#isWatching) return;
-        this.#logger.info(`filesystem.watch present? ${fs.watch != undefined}`);
-        this.#logger.info(`useWatchFile: ${this.#useWatchFile}`);
 
         this.#isWatching = true;
         this.#currentCursorPos = startingCursor;
@@ -320,7 +299,6 @@ export class Tail extends EventEmitter {
         if (flush) this.#change();
 
         if (!this.#useWatchFile) {
-            this.#logger.info(`watch strategy: watch`);
             this.#watcher = fs.watch(
                 this.#filename,
                 this.#fsWatchOptions,
@@ -332,7 +310,6 @@ export class Tail extends EventEmitter {
                 }
             );
         } else {
-            this.#logger.info(`watch strategy: watchFile`);
             fs.watchFile(this.#filename, this.#fsWatchOptions, (curr, prev) => {
                 this.#watchFileEvent(curr, prev);
             });
@@ -356,20 +333,11 @@ export class Tail extends EventEmitter {
                     try {
                         this.watch(this.#currentCursorPos);
                     } catch (ex) {
-                        this.#logger.error(
-                            `'rename' event for ${this.#filename}. File not available anymore.`
-                        );
                         this.emit('error', ex);
                     }
                 }, 1000);
             } else {
-                this.#logger.error(
-                    `'rename' event for ${this.#filename}. File not available anymore.`
-                );
-                this.emit(
-                    'error',
-                    `'rename' event for ${this.#filename}. File not available anymore.`
-                );
+                this.emit('error', `'rename' event for ${this.#filename}. File not available anymore.`);
             }
         }
         // else: rename event but same filename
@@ -383,11 +351,7 @@ export class Tail extends EventEmitter {
                 this.#rename(evtFilename);
             }
         } catch (err) {
-            this.#logger.error(`watchEvent for ${this.#filename} failed: ${err}`);
-            this.emit(
-                'error',
-                `watchEvent for ${this.#filename} failed: ${err}`
-            );
+            this.emit('error', `watchEvent for ${this.#filename} failed: ${err}`);
         }
     }
 
@@ -413,8 +377,5 @@ export class Tail extends EventEmitter {
         }
         this.#isWatching = false;
         this.#queue = []; // TODO: is this correct behaviour?
-        if (this.#logger) {
-            this.#logger.info(`Unwatch ${this.#filename}`);
-        }
     }
 }
