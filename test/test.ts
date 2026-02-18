@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it, beforeEach, afterEach } from 'node:test';
-import { exec } from 'node:child_process';
-import { access, unlink, writeFile, constants as fsConstants, openSync, writeSync, closeSync, unlinkSync } from 'node:fs';
+import { access, unlink, writeFile, constants as fsConstants, openSync, writeSync, closeSync, unlinkSync, rename } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { EOL } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { Tail } from '../src/tail.js';
 
@@ -73,11 +71,11 @@ describe('Tail', () => {
         const fd = openSync(fileToTest, 'w+');
         const lines = ['line  0', 'line  1', 'line  2', 'line  3'];
         for (const l of lines) {
-            writeSync(fd, l + EOL);
+            writeSync(fd, l + '\n');
         }
         closeSync(fd);
 
-        let readLines: string[] = [];
+        const readLines: string[] = [];
 
         setTimeout(() => {
             const tailedFile = new Tail(fileToTest, { fromBeginning: true });
@@ -102,7 +100,7 @@ describe('Tail', () => {
         }
         closeSync(fd);
 
-        let readLines: string[] = [];
+        const readLines: string[] = [];
         const tailedFile = new Tail(fileToTest, { fromBeginning: true, fsWatchOptions: { interval: 100 } });
         
         tailedFile.on('line', (line) => {
@@ -153,7 +151,8 @@ describe('Tail', () => {
             done();
         });
 
-        exec(`mv ${fileToTest} ${newName}`);
+        //! This must be async or it will block Tail from detecting it happen and crash
+        rename(fileToTest, newName, () => {});
 
         setTimeout(() => {
             const fdNew = openSync(newName, 'w+');
@@ -209,9 +208,7 @@ describe('Tail', () => {
             writeNo++;
         }, 50);
 
-        setTimeout(() => {
-            exec(`mv ${fileToTest} ${newName}`);
-        }, 250);
+        setTimeout(() => rename(fileToTest, newName, () => {}), 250);
     });
 
     describe('nLines', () => {
