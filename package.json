@@ -27,16 +27,12 @@
     },
     "scripts": {
         "build": "tsc --declaration",
-        "test": "npx mocha --node-option import=tsx ./test/test.ts",
+        "test": "node --import tsx --test ./test/test.ts",
         "coverage": "nyc npm run test"
     },
     "license": "MIT",
     "devDependencies": {
-        "@types/chai": "^4.3.5",
-        "@types/mocha": "^10.0.1",
         "@types/node": "^18.16.3",
-        "chai": "4.x",
-        "mocha": "10.x",
         "nyc": "^15.1.0",
         "tsx": "^4.21.0",
         "typescript": "^5.0.4"
