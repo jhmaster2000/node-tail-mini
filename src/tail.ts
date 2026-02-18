@@ -1,18 +1,6 @@
 import { EventEmitter } from 'node:events';
-import {
-    accessSync,
-    statSync,
-    openSync,
-    readSync,
-    closeSync,
-    createReadStream,
-    watch,
-    watchFile,
-    unwatchFile,
-    constants as fsContants,
-    FSWatcher
-} from 'node:fs';
 import { dirname, join } from 'node:path';
+import fs from 'node:fs';
 
 interface FSWatchOptions {
     interval: number;
@@ -45,85 +33,81 @@ class DevNull {
 }
 
 export class Tail extends EventEmitter {
-    private filename: string;
-    private absPath: string;
-    private separator?: string | RegExp | null;
-    private fsWatchOptions: any;
-    private follow: boolean;
-    private logger: DevNull;
-    private useWatchFile: boolean;
-    private flushAtEOF: boolean;
-    private encoding: BufferEncoding;
-    private nLines?: number;
-    private rewatchId: NodeJS.Timeout | undefined;
-    private isWatching: boolean;
-    private queue: QueueItem[] = [];
-    // NOTE Should we rename that as it is a string instead of a Buffer?
-    private buffer: string;
-    private watcher: FSWatcher | undefined;
-    // NOTE never read variable, should we keep it?
-    private pos: number;
-    private internalDispatcher: EventEmitter;
-    private currentCursorPos: number = 0;
+    #filename: string;
+    #absPath: string;
+    #separator?: string | RegExp | null;
+    #fsWatchOptions: any;
+    #follow: boolean;
+    #logger: DevNull;
+    #useWatchFile: boolean;
+    #flushAtEOF: boolean;
+    #encoding: BufferEncoding;
+    #nLines?: number;
+    #rewatchId: NodeJS.Timeout | undefined;
+    #isWatching: boolean;
+    #queue: QueueItem[] = [];
+    #buffer: string;
+    #watcher?: fs.FSWatcher;
+    #internalDispatcher: EventEmitter;
+    #currentCursorPos: number = 0;
 
     constructor(filename: string, options: TailOptions = {}) {
         super();
-        this.filename = filename;
-        this.absPath = dirname(this.filename);
-        this.separator =
+        this.#filename = filename;
+        this.#absPath = dirname(this.#filename);
+        this.#separator =
             options.separator !== undefined ? options.separator : /[\r]{0,1}\n/; // null is a valid param
-        this.fsWatchOptions = options.fsWatchOptions || {};
-        this.follow = options.follow ?? true;
-        this.logger = options.logger || new DevNull();
-        this.useWatchFile = options.useWatchFile || false;
-        this.flushAtEOF = options.flushAtEOF || false;
-        this.encoding = options.encoding || 'utf-8';
+        this.#fsWatchOptions = options.fsWatchOptions || {};
+        this.#follow = options.follow ?? true;
+        this.#logger = options.logger || new DevNull();
+        this.#useWatchFile = options.useWatchFile || false;
+        this.#flushAtEOF = options.flushAtEOF || false;
+        this.#encoding = options.encoding || 'utf-8';
         const fromBeginning = options.fromBeginning || false;
-        this.nLines = options.nLines ?? 0;
+        this.#nLines = options.nLines ?? 0;
 
-        this.logger.info(`Tail starting...`);
-        this.logger.info(`filename: ${this.filename}`);
-        this.logger.info(`encoding: ${this.encoding}`);
+        this.#logger.info(`Tail starting...`);
+        this.#logger.info(`filename: ${this.#filename}`);
+        this.#logger.info(`encoding: ${this.#encoding}`);
 
         try {
-            accessSync(this.filename, fsContants.F_OK);
+            fs.accessSync(this.#filename, fs.constants.F_OK);
         } catch (err: any) {
             if (err.code == 'ENOENT') {
                 throw err;
             }
         }
 
-        this.buffer = '';
-        this.internalDispatcher = new EventEmitter();
-        this.isWatching = false;
-        this.pos = 0;
+        this.#buffer = '';
+        this.#internalDispatcher = new EventEmitter();
+        this.#isWatching = false;
 
         // this.internalDispatcher.on('next',this.readBlock);
-        this.internalDispatcher.on('next', () => {
-            this.readBlock();
+        this.#internalDispatcher.on('next', () => {
+            this.#readBlock();
         });
 
         let cursor;
 
-        this.logger.info(`fromBeginning: ${fromBeginning}`);
+        this.#logger.info(`fromBeginning: ${fromBeginning}`);
         if (fromBeginning) {
             cursor = 0;
-        } else if (this.nLines <= 0) {
+        } else if (this.#nLines <= 0) {
             cursor = 0;
-        } else if (this.nLines !== undefined) {
-            cursor = this.getPositionAtNthLine(this.nLines);
+        } else if (this.#nLines !== undefined) {
+            cursor = this.#getPositionAtNthLine(this.#nLines);
         } else {
-            cursor = this.latestPosition();
+            cursor = this.#latestPosition();
         }
 
         if (cursor === undefined) throw new Error('Tail can\'t initialize.');
 
-        const flush = fromBeginning || this.nLines != undefined;
+        const flush = fromBeginning || this.#nLines != undefined;
         try {
             this.watch(cursor, flush);
         } catch (err) {
-            this.logger.error(`watch for ${this.filename} failed: ${err}`);
-            this.emit('error', `watch for ${this.filename} failed: ${err}`);
+            this.#logger.error(`watch for ${this.#filename} failed: ${err}`);
+            this.emit('error', `watch for ${this.#filename} failed: ${err}`);
         }
     }
 
@@ -133,7 +117,7 @@ export class Tail extends EventEmitter {
      * @param {string} text
      * @returns {number | null}
      */
-    private getIndexOfLastLine(text: string): number | null {
+    #getIndexOfLastLine(text: string): number | null {
         /**
          * Helper function get the last match as string
          * @param {string} haystack
@@ -153,7 +137,7 @@ export class Tail extends EventEmitter {
             return matches[matches.length - 1];
         };
         // NOTE `as string` was used to cast the needle to string, but it can be null as well. Just making TS compiler happy
-        const endSep = getLastMatch(text, this.separator as string);
+        const endSep = getLastMatch(text, this.#separator as string);
 
         if (!endSep) return null;
 
@@ -166,7 +150,7 @@ export class Tail extends EventEmitter {
 
             const trimmed = text.substring(0, endSepIndex);
             // NOTE `as string` was used to cast the needle to string, but it can be null as well. Just making TS compiler happy
-            const startSep = getLastMatch(trimmed, this.separator as string);
+            const startSep = getLastMatch(trimmed, this.#separator as string);
 
             // If there isn't another separator, the line isn't complete so
             // so return null to get more data
@@ -198,14 +182,14 @@ export class Tail extends EventEmitter {
      * @param {number} nLines
      * @returns {number}
      */
-    private getPositionAtNthLine(nLines: number): number {
-        const { size } = statSync(this.filename);
+    #getPositionAtNthLine(nLines: number): number {
+        const { size } = fs.statSync(this.#filename);
 
         if (size === 0) {
             return 0;
         }
 
-        const fd = openSync(this.filename, 'r');
+        const fd = fs.openSync(this.#filename, 'r');
         // Start from the end of the file and work backwards in specific chunks
         let currentReadPosition = size;
         const chunkSizeBytes = Math.min(1024, size);
@@ -225,7 +209,7 @@ export class Tail extends EventEmitter {
 
             // Read a chunk of the file and prepend it to the working buffer
             const buffer = Buffer.alloc(chunkSizeBytes);
-            const bytesRead = readSync(
+            const bytesRead = fs.readSync(
                 fd,
                 buffer,
                 0, // position in buffer to write to
@@ -238,9 +222,9 @@ export class Tail extends EventEmitter {
             // Buffer.from which accepts both types
             const readArray = buffer.subarray(0, bytesRead);
             remaining =
-                Buffer.from(readArray).toString(this.encoding) + remaining;
+                Buffer.from(readArray).toString(this.#encoding) + remaining;
 
-            let index = this.getIndexOfLastLine(remaining);
+            let index = this.#getIndexOfLastLine(remaining);
 
             while (index !== null && lineBytes.length < nLines) {
                 const line = remaining.substring(index);
@@ -248,60 +232,60 @@ export class Tail extends EventEmitter {
                 lineBytes.push(Buffer.byteLength(line));
                 remaining = remaining.substring(0, index);
 
-                index = this.getIndexOfLastLine(remaining);
+                index = this.#getIndexOfLastLine(remaining);
             }
         }
 
-        closeSync(fd);
+        fs.closeSync(fd);
 
         return size - lineBytes.reduce((acc, cur) => acc + cur, 0);
     }
 
-    private latestPosition() {
+    #latestPosition() {
         try {
-            return statSync(this.filename).size;
+            return fs.statSync(this.#filename).size;
         } catch (err) {
-            this.logger.error(`size check for ${this.filename} failed: ${err}`);
+            this.#logger.error(`size check for ${this.#filename} failed: ${err}`);
             this.emit(
                 'error',
-                `size check for ${this.filename} failed: ${err}`
+                `size check for ${this.#filename} failed: ${err}`
             );
             throw err;
         }
     }
 
-    private readBlock() {
-        if (this.queue.length >= 1) {
-            const block = this.queue[0];
+    #readBlock() {
+        if (this.#queue.length >= 1) {
+            const block = this.#queue[0];
             if (block!.end > block.start) {
-                let stream = createReadStream(this.filename, {
+                let stream = fs.createReadStream(this.#filename, {
                     start: block.start,
                     end: block.end - 1,
-                    encoding: this.encoding,
+                    encoding: this.#encoding,
                 });
                 stream.on('error', (error) => {
-                    this.logger.error(`Tail error: ${error}`);
+                    this.#logger.error(`Tail error: ${error}`);
                     this.emit('error', error);
                 });
                 stream.on('end', () => {
-                    let _ = this.queue.shift();
-                    if (this.queue.length > 0) {
-                        this.internalDispatcher.emit('next');
+                    let _ = this.#queue.shift();
+                    if (this.#queue.length > 0) {
+                        this.#internalDispatcher.emit('next');
                     }
-                    if (this.flushAtEOF && this.buffer.length > 0) {
-                        this.emit('line', this.buffer);
-                        this.buffer = '';
+                    if (this.#flushAtEOF && this.#buffer.length > 0) {
+                        this.emit('line', this.#buffer);
+                        this.#buffer = '';
                     }
                 });
                 stream.on('data', (d) => {
-                    if (this.separator === null) {
+                    if (this.#separator === null) {
                         this.emit('line', d);
                     } else {
-                        this.buffer += d;
+                        this.#buffer += d;
                         // NOTE `as string` was used to cast the needle to string, but it can be null as well. Just making TS compiler happy
-                        let parts = this.buffer.split(this.separator as string);
+                        let parts = this.#buffer.split(this.#separator as string);
                         // NOTE Since parts.pop could return undefined, i'm returning a empty string when that happens
-                        this.buffer = parts.pop() ?? '';
+                        this.#buffer = parts.pop() ?? '';
                         for (const chunk of parts) {
                             this.emit('line', chunk);
                         }
@@ -311,51 +295,51 @@ export class Tail extends EventEmitter {
         }
     }
 
-    private change() {
-        let p = this.latestPosition();
-        if (p < this.currentCursorPos) {
+    #change() {
+        let p = this.#latestPosition();
+        if (p < this.#currentCursorPos) {
             // scenario where text is not appended but it's actually a w+
-            this.currentCursorPos = p;
-        } else if (p > this.currentCursorPos) {
-            this.queue.push({ start: this.currentCursorPos, end: p });
-            this.currentCursorPos = p;
-            if (this.queue.length == 1) {
-                this.internalDispatcher.emit('next');
+            this.#currentCursorPos = p;
+        } else if (p > this.#currentCursorPos) {
+            this.#queue.push({ start: this.#currentCursorPos, end: p });
+            this.#currentCursorPos = p;
+            if (this.#queue.length == 1) {
+                this.#internalDispatcher.emit('next');
             }
         }
     }
 
     watch(startingCursor: number, flush?: boolean) {
-        if (this.isWatching) return;
-        this.logger.info(`filesystem.watch present? ${watch != undefined}`);
-        this.logger.info(`useWatchFile: ${this.useWatchFile}`);
+        if (this.#isWatching) return;
+        this.#logger.info(`filesystem.watch present? ${fs.watch != undefined}`);
+        this.#logger.info(`useWatchFile: ${this.#useWatchFile}`);
 
-        this.isWatching = true;
-        this.currentCursorPos = startingCursor;
+        this.#isWatching = true;
+        this.#currentCursorPos = startingCursor;
         // force a file flush is either fromBegining or nLines flags were passed.
-        if (flush) this.change();
+        if (flush) this.#change();
 
-        if (!this.useWatchFile) {
-            this.logger.info(`watch strategy: watch`);
-            this.watcher = watch(
-                this.filename,
-                this.fsWatchOptions,
+        if (!this.#useWatchFile) {
+            this.#logger.info(`watch strategy: watch`);
+            this.#watcher = fs.watch(
+                this.#filename,
+                this.#fsWatchOptions,
                 (e, filename) => {
                     if (!filename) throw new Error('assertion failed'); //! wip
                     // NOTE Filename here is a `Buffer`, how it's used as a string?
                     // NOTE Test if filename.toString changes the behavior
-                    this.watchEvent(e, filename.toString());
+                    this.#watchEvent(e, filename.toString());
                 }
             );
         } else {
-            this.logger.info(`watch strategy: watchFile`);
-            watchFile(this.filename, this.fsWatchOptions, (curr, prev) => {
-                this.watchFileEvent(curr, prev);
+            this.#logger.info(`watch strategy: watchFile`);
+            fs.watchFile(this.#filename, this.#fsWatchOptions, (curr, prev) => {
+                this.#watchFileEvent(curr, prev);
             });
         }
     }
 
-    private rename(filename: string) {
+    #rename(filename: string) {
         // TODO
         // MacOS sometimes throws a rename event for no reason.
         // Different platforms might behave differently.
@@ -364,73 +348,73 @@ export class Tail extends EventEmitter {
         // https://nodejs.org/api/fs.html#fs_filename_argument
         // Better solution would be check inode but it will require a timeout and
         // a sync file read.
-        if (filename === undefined || filename !== this.filename) {
+        if (filename === undefined || filename !== this.#filename) {
             this.unwatch();
-            if (this.follow) {
-                this.filename = join(this.absPath, filename);
-                this.rewatchId = setTimeout(() => {
+            if (this.#follow) {
+                this.#filename = join(this.#absPath, filename);
+                this.#rewatchId = setTimeout(() => {
                     try {
-                        this.watch(this.currentCursorPos);
+                        this.watch(this.#currentCursorPos);
                     } catch (ex) {
-                        this.logger.error(
-                            `'rename' event for ${this.filename}. File not available anymore.`
+                        this.#logger.error(
+                            `'rename' event for ${this.#filename}. File not available anymore.`
                         );
                         this.emit('error', ex);
                     }
                 }, 1000);
             } else {
-                this.logger.error(
-                    `'rename' event for ${this.filename}. File not available anymore.`
+                this.#logger.error(
+                    `'rename' event for ${this.#filename}. File not available anymore.`
                 );
                 this.emit(
                     'error',
-                    `'rename' event for ${this.filename}. File not available anymore.`
+                    `'rename' event for ${this.#filename}. File not available anymore.`
                 );
             }
         }
         // else: rename event but same filename
     }
 
-    private watchEvent(evtName: 'change' | 'rename', evtFilename: string) {
+    #watchEvent(evtName: 'change' | 'rename', evtFilename: string) {
         try {
             if (evtName === 'change') {
-                this.change();
+                this.#change();
             } else if (evtName === 'rename') {
-                this.rename(evtFilename);
+                this.#rename(evtFilename);
             }
         } catch (err) {
-            this.logger.error(`watchEvent for ${this.filename} failed: ${err}`);
+            this.#logger.error(`watchEvent for ${this.#filename} failed: ${err}`);
             this.emit(
                 'error',
-                `watchEvent for ${this.filename} failed: ${err}`
+                `watchEvent for ${this.#filename} failed: ${err}`
             );
         }
     }
 
-    private watchFileEvent(curr: Cursor, prev: Cursor) {
+    #watchFileEvent(curr: Cursor, prev: Cursor) {
         if (curr.size > prev.size) {
-            this.currentCursorPos = curr.size; // Update this.currentCursorPos so that a consumer can determine if entire file has been handled
-            this.queue.push({ start: prev.size, end: curr.size });
-            if (this.queue.length == 1) {
-                this.internalDispatcher.emit('next');
+            this.#currentCursorPos = curr.size; // Update this.currentCursorPos so that a consumer can determine if entire file has been handled
+            this.#queue.push({ start: prev.size, end: curr.size });
+            if (this.#queue.length == 1) {
+                this.#internalDispatcher.emit('next');
             }
         }
     }
 
     unwatch() {
-        if (this.watcher) {
-            this.watcher.close();
+        if (this.#watcher) {
+            this.#watcher.close();
         } else {
-            unwatchFile(this.filename);
+            fs.unwatchFile(this.#filename);
         }
-        if (this.rewatchId) {
-            clearTimeout(this.rewatchId);
-            this.rewatchId = undefined;
+        if (this.#rewatchId) {
+            clearTimeout(this.#rewatchId);
+            this.#rewatchId = undefined;
         }
-        this.isWatching = false;
-        this.queue = []; // TODO: is this correct behaviour?
-        if (this.logger) {
-            this.logger.info(`Unwatch ${this.filename}`);
+        this.#isWatching = false;
+        this.#queue = []; // TODO: is this correct behaviour?
+        if (this.#logger) {
+            this.#logger.info(`Unwatch ${this.#filename}`);
         }
     }
 }
