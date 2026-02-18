@@ -1,10 +1,10 @@
 import { Tail } from '../src/tail';
-import { expect, assert } from "chai";
-import { exec } from "child_process";
-import { access, unlink, writeFile, constants as fsConstants, openSync, writeSync, closeSync, unlinkSync } from "fs";
-import { join, dirname } from "path";
-import { EOL } from "os";
-import { fileURLToPath } from 'url';
+import { expect, assert } from 'chai';
+import { exec } from 'node:child_process';
+import { access, unlink, writeFile, constants as fsConstants, openSync, writeSync, closeSync, unlinkSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { EOL } from 'node:os';
+import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -304,8 +304,8 @@ describe('Tail', function () {
             done()
         });
 
-    setTimeout(() => {
-        unlinkSync(fileToTest);
-    }, 2000);
-});
+        setTimeout(() => {
+            unlinkSync(fileToTest);
+        }, 2000);
+    });
 });

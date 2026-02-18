@@ -1,4 +1,4 @@
-import events from 'events';
+import { EventEmitter } from 'node:events';
 import {
     accessSync,
     statSync,
@@ -11,9 +11,8 @@ import {
     unwatchFile,
     constants as fsContants,
     FSWatcher
-} from "fs";
-import { dirname, join } from "path";
-import { EventEmitter } from 'stream';
+} from 'node:fs';
+import { dirname, join } from 'node:path';
 
 interface FSWatchOptions {
     interval: number;
@@ -41,11 +40,11 @@ interface Cursor {
 }
 
 class DevNull {
-    info(...args: any) {}
-    error(...args: any) {}
+    info(...args: any) { }
+    error(...args: any) { }
 }
 
-export class Tail extends events.EventEmitter {
+export class Tail extends EventEmitter {
     private filename: string;
     private absPath: string;
     private separator?: string | RegExp | null;
@@ -95,7 +94,7 @@ export class Tail extends events.EventEmitter {
         }
 
         this.buffer = "";
-        this.internalDispatcher = new events.EventEmitter();
+        this.internalDispatcher = new EventEmitter();
         this.isWatching = false;
         this.pos = 0;
 
