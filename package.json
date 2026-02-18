@@ -27,7 +27,7 @@
     },
     "scripts": {
         "build": "tsc --declaration",
-        "test": "TS_NODE_FILES=true mocha -r ts-node/register ./test/test.ts",
+        "test": "npx mocha --node-option import=tsx ./test/test.ts",
         "coverage": "nyc npm run test"
     },
     "license": "MIT",
@@ -38,7 +38,7 @@
         "chai": "4.x",
         "mocha": "10.x",
         "nyc": "^15.1.0",
-        "ts-node": "^10.9.1",
+        "tsx": "^4.21.0",
         "typescript": "^5.0.4"
     }
 }

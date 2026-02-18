@@ -2,8 +2,11 @@ import { Tail } from '../src/tail';
 import { expect, assert } from "chai";
 import { exec } from "child_process";
 import { access, unlink, writeFile, constants as fsConstants, openSync, writeSync, closeSync, unlinkSync } from "fs";
-import { join } from "path";
+import { join, dirname } from "path";
 import { EOL } from "os";
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const fileToTest = join(__dirname, 'example.txt');
 

@@ -1,8 +1,4 @@
-# Ignore unused directories
-/node_modules
 /test
-/.git
 /src
-.gitignore
-README
 .mocharc.json
+tsconfig.json
