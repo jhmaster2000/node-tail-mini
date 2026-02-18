@@ -1,4 +1,5 @@
 {
+    "type": "module",
     "author": {
         "name": "Luca Grulla",
         "url": "https://www.lucagrulla.com"
@@ -26,8 +27,6 @@
     },
     "scripts": {
         "build": "tsc --declaration",
-        "prepare": "npm run build",
-        "prepublishOnly": "npm run test",
         "test": "TS_NODE_FILES=true mocha -r ts-node/register ./test/test.ts",
         "coverage": "nyc npm run test"
     },

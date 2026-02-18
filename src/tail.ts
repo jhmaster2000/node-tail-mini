@@ -342,6 +342,7 @@ export class Tail extends events.EventEmitter {
                 this.filename,
                 this.fsWatchOptions,
                 (e, filename) => {
+                    if (!filename) throw new Error('assertion failed'); //! wip
                     // NOTE Filename here is a `Buffer`, how it's used as a string?
                     // NOTE Test if filename.toString changes the behavior
                     this.watchEvent(e, filename.toString());

@@ -3,9 +3,6 @@
 /test
 /.git
 /src
-/misc
-/.github
 .gitignore
-_config.yml
 README
 .mocharc.json
