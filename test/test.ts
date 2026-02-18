@@ -23,8 +23,8 @@ describe('Tail', () => {
         });
     });
 
-    const lineEndings = [{ le: '\r\n', desc: "Windows" }, { le: '\n', desc: "Linux" }];
-    
+    const lineEndings = [{ le: '\r\n', desc: 'Windows' }, { le: '\n', desc: 'Linux' }];
+
     lineEndings.forEach(({ le, desc }) => {
         it(`should read a file with ${desc} line ending`, (t, done) => {
             const text = `This is a ${desc} line ending  ${le}`;
@@ -52,7 +52,7 @@ describe('Tail', () => {
     });
 
     it('should handle null separator option to not split chunks', (t, done) => {
-        const text = "This is \xA9test and 22\xB0 C";
+        const text = 'This is \xA9test and 22\xB0 C';
         const fd = openSync(fileToTest, 'w+');
         const tailedFile = new Tail(fileToTest, { separator: null, fsWatchOptions: { interval: 100 } });
 
@@ -102,7 +102,7 @@ describe('Tail', () => {
 
         const readLines: string[] = [];
         const tailedFile = new Tail(fileToTest, { fromBeginning: true, fsWatchOptions: { interval: 100 } });
-        
+
         tailedFile.on('line', (line) => {
             readLines.push(line);
             if (readLines.length === lines.length) {
@@ -127,13 +127,13 @@ describe('Tail', () => {
             unlinkSync(fileToTest);
         });
 
-        writeSync(fd, "This is a line\n");
+        writeSync(fd, 'This is a line\n');
         closeSync(fd);
     });
 
     it('should throw exception if file is missing', () => {
         try {
-            new Tail("missingFile.txt", { fsWatchOptions: { interval: 100 } });
+            new Tail('missingFile.txt', { fsWatchOptions: { interval: 100 } });
             assert.fail('Should have thrown an error');
         } catch (ex: any) {
             assert.strictEqual(ex.code, 'ENOENT');
@@ -141,7 +141,7 @@ describe('Tail', () => {
     });
 
     it('should deal with file rename', { timeout: 5000 }, (t, done) => {
-        const text = "This is a line\n";
+        const text = 'This is a line\n';
         const tailedFile = new Tail(fileToTest, { fsWatchOptions: { interval: 100 } });
         const newName = join(__dirname, 'example2.txt');
 
@@ -192,7 +192,7 @@ describe('Tail', () => {
         tailedFile.on('line', (line: string) => {
             assert.strictEqual(line, readNo.toString());
             readNo++;
-            
+
             if (readNo === 30) {
                 closeSync(fd);
                 clearInterval(id);
@@ -222,7 +222,7 @@ describe('Tail', () => {
             it(`should respect nLines when ${desc} line endings ends with a newline`, (t, done) => {
                 const fd = openSync(fileToTest, 'w+');
                 const tokens = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-                const input = tokens.reduce((acc, n) => `${acc}${n}${le}`, "");
+                const input = tokens.reduce((acc, n) => `${acc}${n}${le}`, '');
                 writeSync(fd, input);
 
                 const n = 3;
@@ -247,7 +247,7 @@ describe('Tail', () => {
                 const input = tokens.reduce((acc, n, i) => {
                     const t = (i === tokens.length - 1) ? n : `${n}${le}`;
                     return `${acc}${t}`;
-                }, "");
+                }, '');
                 writeSync(fd, input);
 
                 const n = 3;
@@ -276,7 +276,7 @@ describe('Tail', () => {
 
         const tailedFile = new Tail(fileToTest, { flushAtEOF: true, fsWatchOptions: { interval: 100 } });
         tailedFile.on('error', (e: any) => {
-            assert.strictEqual(e.code, "ENOENT");
+            assert.strictEqual(e.code, 'ENOENT');
             done();
         });
 

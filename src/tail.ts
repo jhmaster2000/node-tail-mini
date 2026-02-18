@@ -17,7 +17,7 @@ import { dirname, join } from 'node:path';
 interface FSWatchOptions {
     interval: number;
 }
-// const environment = process.env['NODE_ENV'] || 'development'
+
 export interface TailOptions {
     separator?: string | RegExp | null;
     fsWatchOptions?: FSWatchOptions;
@@ -77,7 +77,7 @@ export class Tail extends EventEmitter {
         this.logger = options.logger || new DevNull();
         this.useWatchFile = options.useWatchFile || false;
         this.flushAtEOF = options.flushAtEOF || false;
-        this.encoding = options.encoding || "utf-8";
+        this.encoding = options.encoding || 'utf-8';
         const fromBeginning = options.fromBeginning || false;
         this.nLines = options.nLines ?? 0;
 
@@ -88,18 +88,18 @@ export class Tail extends EventEmitter {
         try {
             accessSync(this.filename, fsContants.F_OK);
         } catch (err: any) {
-            if (err.code == "ENOENT") {
+            if (err.code == 'ENOENT') {
                 throw err;
             }
         }
 
-        this.buffer = "";
+        this.buffer = '';
         this.internalDispatcher = new EventEmitter();
         this.isWatching = false;
         this.pos = 0;
 
         // this.internalDispatcher.on('next',this.readBlock);
-        this.internalDispatcher.on("next", () => {
+        this.internalDispatcher.on('next', () => {
             this.readBlock();
         });
 
@@ -116,14 +116,14 @@ export class Tail extends EventEmitter {
             cursor = this.latestPosition();
         }
 
-        if (cursor === undefined) throw new Error("Tail can't initialize.");
+        if (cursor === undefined) throw new Error('Tail can\'t initialize.');
 
         const flush = fromBeginning || this.nLines != undefined;
         try {
             this.watch(cursor, flush);
         } catch (err) {
             this.logger.error(`watch for ${this.filename} failed: ${err}`);
-            this.emit("error", `watch for ${this.filename} failed: ${err}`);
+            this.emit('error', `watch for ${this.filename} failed: ${err}`);
         }
     }
 
@@ -205,13 +205,13 @@ export class Tail extends EventEmitter {
             return 0;
         }
 
-        const fd = openSync(this.filename, "r");
+        const fd = openSync(this.filename, 'r');
         // Start from the end of the file and work backwards in specific chunks
         let currentReadPosition = size;
         const chunkSizeBytes = Math.min(1024, size);
         const lineBytes = [];
 
-        let remaining = "";
+        let remaining = '';
 
         while (lineBytes.length < nLines) {
             // Shift the current read position backward to the amount we're about to read
@@ -263,7 +263,7 @@ export class Tail extends EventEmitter {
         } catch (err) {
             this.logger.error(`size check for ${this.filename} failed: ${err}`);
             this.emit(
-                "error",
+                'error',
                 `size check for ${this.filename} failed: ${err}`
             );
             throw err;
@@ -279,31 +279,31 @@ export class Tail extends EventEmitter {
                     end: block.end - 1,
                     encoding: this.encoding,
                 });
-                stream.on("error", (error) => {
+                stream.on('error', (error) => {
                     this.logger.error(`Tail error: ${error}`);
-                    this.emit("error", error);
+                    this.emit('error', error);
                 });
-                stream.on("end", () => {
+                stream.on('end', () => {
                     let _ = this.queue.shift();
                     if (this.queue.length > 0) {
-                        this.internalDispatcher.emit("next");
+                        this.internalDispatcher.emit('next');
                     }
                     if (this.flushAtEOF && this.buffer.length > 0) {
-                        this.emit("line", this.buffer);
-                        this.buffer = "";
+                        this.emit('line', this.buffer);
+                        this.buffer = '';
                     }
                 });
-                stream.on("data", (d) => {
+                stream.on('data', (d) => {
                     if (this.separator === null) {
-                        this.emit("line", d);
+                        this.emit('line', d);
                     } else {
                         this.buffer += d;
                         // NOTE `as string` was used to cast the needle to string, but it can be null as well. Just making TS compiler happy
                         let parts = this.buffer.split(this.separator as string);
                         // NOTE Since parts.pop could return undefined, i'm returning a empty string when that happens
-                        this.buffer = parts.pop() ?? "";
+                        this.buffer = parts.pop() ?? '';
                         for (const chunk of parts) {
-                            this.emit("line", chunk);
+                            this.emit('line', chunk);
                         }
                     }
                 });
@@ -314,13 +314,13 @@ export class Tail extends EventEmitter {
     private change() {
         let p = this.latestPosition();
         if (p < this.currentCursorPos) {
-            //scenario where text is not appended but it's actually a w+
+            // scenario where text is not appended but it's actually a w+
             this.currentCursorPos = p;
         } else if (p > this.currentCursorPos) {
             this.queue.push({ start: this.currentCursorPos, end: p });
             this.currentCursorPos = p;
             if (this.queue.length == 1) {
-                this.internalDispatcher.emit("next");
+                this.internalDispatcher.emit('next');
             }
         }
     }
@@ -332,7 +332,7 @@ export class Tail extends EventEmitter {
 
         this.isWatching = true;
         this.currentCursorPos = startingCursor;
-        //force a file flush is either fromBegining or nLines flags were passed.
+        // force a file flush is either fromBegining or nLines flags were passed.
         if (flush) this.change();
 
         if (!this.useWatchFile) {
@@ -356,13 +356,13 @@ export class Tail extends EventEmitter {
     }
 
     private rename(filename: string) {
-        //TODO
-        //MacOS sometimes throws a rename event for no reason.
-        //Different platforms might behave differently.
-        //see https://nodejs.org/api/fs.html#fs_fs_watch_filename_options_listener
-        //filename might not be present.
-        //https://nodejs.org/api/fs.html#fs_filename_argument
-        //Better solution would be check inode but it will require a timeout and
+        // TODO
+        // MacOS sometimes throws a rename event for no reason.
+        // Different platforms might behave differently.
+        // see https://nodejs.org/api/fs.html#fs_fs_watch_filename_options_listener
+        // filename might not be present.
+        // https://nodejs.org/api/fs.html#fs_filename_argument
+        // Better solution would be check inode but it will require a timeout and
         // a sync file read.
         if (filename === undefined || filename !== this.filename) {
             this.unwatch();
@@ -375,7 +375,7 @@ export class Tail extends EventEmitter {
                         this.logger.error(
                             `'rename' event for ${this.filename}. File not available anymore.`
                         );
-                        this.emit("error", ex);
+                        this.emit('error', ex);
                     }
                 }, 1000);
             } else {
@@ -383,26 +383,25 @@ export class Tail extends EventEmitter {
                     `'rename' event for ${this.filename}. File not available anymore.`
                 );
                 this.emit(
-                    "error",
+                    'error',
                     `'rename' event for ${this.filename}. File not available anymore.`
                 );
             }
-        } else {
-            // this.logger.info("rename event but same filename")
         }
+        // else: rename event but same filename
     }
 
-    private watchEvent(evtName: "change" | "rename", evtFilename: string) {
+    private watchEvent(evtName: 'change' | 'rename', evtFilename: string) {
         try {
-            if (evtName === "change") {
+            if (evtName === 'change') {
                 this.change();
-            } else if (evtName === "rename") {
+            } else if (evtName === 'rename') {
                 this.rename(evtFilename);
             }
         } catch (err) {
             this.logger.error(`watchEvent for ${this.filename} failed: ${err}`);
             this.emit(
-                "error",
+                'error',
                 `watchEvent for ${this.filename} failed: ${err}`
             );
         }
@@ -410,10 +409,10 @@ export class Tail extends EventEmitter {
 
     private watchFileEvent(curr: Cursor, prev: Cursor) {
         if (curr.size > prev.size) {
-            this.currentCursorPos = curr.size; //Update this.currentCursorPos so that a consumer can determine if entire file has been handled
+            this.currentCursorPos = curr.size; // Update this.currentCursorPos so that a consumer can determine if entire file has been handled
             this.queue.push({ start: prev.size, end: curr.size });
             if (this.queue.length == 1) {
-                this.internalDispatcher.emit("next");
+                this.internalDispatcher.emit('next');
             }
         }
     }
