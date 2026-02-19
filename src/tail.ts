@@ -6,7 +6,9 @@ export interface TailOptions {
     separator?: string | RegExp;
     encoding?: BufferEncoding;
     flushAtEOF?: boolean;
-    forcePolling?: boolean;
+    /** Set to override the platform default choice between native and polling methods. */
+    polling?: boolean;
+    /** Polling interval in milliseconds. Ignored if not using polling method. */
     pollingInterval?: number;
     /**
      * Number of existing lines to readback on tail start.
@@ -34,7 +36,8 @@ export class Tail extends EventEmitter {
     #currentCursorPos: number = 0;
     #unwatched: boolean = false;
 
-    static DEFAULT_USE_POLLING = false;
+    // Default to native watchers on Windows, macOS and Linux, default to polling on other platforms.
+    static #POLLING_PREFERRED = process.platform !== 'win32' && process.platform !== 'darwin' && process.platform !== 'linux';
 
     constructor(filename: string, options: TailOptions = {}) {
         super();
@@ -64,18 +67,13 @@ export class Tail extends EventEmitter {
         if (nLines !== 0) this.#change();
         
         try {
-            const useWatchFile = options.forcePolling ?? Tail.DEFAULT_USE_POLLING;
+            const useWatchFile = options.polling ?? Tail.#POLLING_PREFERRED;
             // Start watching
-            if (!useWatchFile) {
-                this.#watcher = fs.watch(this.#filename, (e) => {
-                    this.#watchEvent(e);
-                });
-            }
-            else {
+            if (useWatchFile) {
                 const interval = options.pollingInterval ?? 1000;
-                fs.watchFile(this.#filename, { interval }, (curr, prev) => {
-                    this.#watchFileEvent(curr, prev);
-                });
+                fs.watchFile(this.#filename, { interval }, (curr, prev) => this.#watchFileEvent(curr, prev));
+            } else {
+                this.#watcher = fs.watch(this.#filename, (event) => this.#watchEvent(event));
             }
         } catch (error) {
             this.unwatch();

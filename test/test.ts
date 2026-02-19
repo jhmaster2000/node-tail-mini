@@ -3,17 +3,18 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import { access, unlink, constants as fsConstants, openSync, writeSync, closeSync, unlinkSync, rename, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Tail } from '../src/tail.js';
+import { Tail, TailOptions } from '../src/tail.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fileToTest = join(__dirname, 'example.txt');
 
-const implementations = ['watch', 'watchFile'] as const;
-const impl: string = 'watch';
-
-describe(`Tail (${impl})`, () => {
-    if (impl === 'watch') Tail.DEFAULT_USE_POLLING = false;
-    if (impl === 'watchFile') Tail.DEFAULT_USE_POLLING = true;
+for (const impl of ['watch', 'watchFile']) describe(`Tail (${impl})`, () => {
+    const TEST_DEFAULT_TAIL_OPTS: TailOptions = {};
+    if (impl === 'watch') TEST_DEFAULT_TAIL_OPTS.polling = false;
+    if (impl === 'watchFile') {
+        TEST_DEFAULT_TAIL_OPTS.polling = true;
+        TEST_DEFAULT_TAIL_OPTS.pollingInterval = 100;
+    }
 
     beforeEach(() => {
         writeFileSync(fileToTest, '');
@@ -34,7 +35,7 @@ describe(`Tail (${impl})`, () => {
             let nbOfReadLines = 0;
 
             const fd = openSync(fileToTest, 'w+');
-            const tailedFile = new Tail(fileToTest, { pollingInterval: 100 });
+            const tailedFile = new Tail(fileToTest, { ...TEST_DEFAULT_TAIL_OPTS });
 
             tailedFile.on('line', (line) => {
                 assert.strictEqual(line, text.replace(/[\r\n]/g, ''));
@@ -61,7 +62,7 @@ describe(`Tail (${impl})`, () => {
 
         const readLines: string[] = [];
 
-        const tailedFile = new Tail(fileToTest, { nLines: -1 });
+        const tailedFile = new Tail(fileToTest, { ...TEST_DEFAULT_TAIL_OPTS, nLines: -1 });
         tailedFile.on('line', (line: string) => {
             readLines.push(line);
             if (readLines.length === lines.length) {
@@ -81,7 +82,7 @@ describe(`Tail (${impl})`, () => {
         closeSync(fd);
 
         const readLines: string[] = [];
-        const tailedFile = new Tail(fileToTest, { nLines: -1, pollingInterval: 100 });
+        const tailedFile = new Tail(fileToTest, { ...TEST_DEFAULT_TAIL_OPTS, nLines: -1 });
 
         tailedFile.on('line', (line) => {
             readLines.push(line);
@@ -97,7 +98,7 @@ describe(`Tail (${impl})`, () => {
 
     it('should throw exception if file is missing', { timeout: 5000 }, () => {
         try {
-            new Tail('missingFile.txt', { pollingInterval: 100 });
+            new Tail('missingFile.txt', { ...TEST_DEFAULT_TAIL_OPTS });
             assert.fail('Should have thrown an error');
         } catch (error: any) {
             assert.strictEqual(error.code, 'ENOENT');
@@ -106,7 +107,7 @@ describe(`Tail (${impl})`, () => {
 
     it('should send error event on deletion of watched file', { timeout: 5000 }, (t, done) => {
         const fd = openSync(fileToTest, 'w+');
-        const tailedFile = new Tail(fileToTest, { pollingInterval: 100 });
+        const tailedFile = new Tail(fileToTest, { ...TEST_DEFAULT_TAIL_OPTS });
 
         tailedFile.on('error', (error) => {
             assert.strictEqual(error.cause.code, 'ENOENT');
@@ -122,7 +123,7 @@ describe(`Tail (${impl})`, () => {
 
     it('should send error event on rename of watched file', { timeout: 5000 }, (t, done) => {
         const text = 'This is a line\n';
-        const tailedFile = new Tail(fileToTest, { pollingInterval: 100 });
+        const tailedFile = new Tail(fileToTest, { ...TEST_DEFAULT_TAIL_OPTS });
         const newName = join(__dirname, 'example2.txt');
 
         tailedFile.on('error', (error) => {
@@ -145,7 +146,7 @@ describe(`Tail (${impl})`, () => {
     it('should emit lines in the right order', { timeout: 5000 }, (t, done) => {
         const fd = openSync(fileToTest, 'w+');
         const linesNo = 50_000;
-        const tailedFile = new Tail(fileToTest, { nLines: -1, pollingInterval: 100 });
+        const tailedFile = new Tail(fileToTest, { ...TEST_DEFAULT_TAIL_OPTS, nLines: -1 });
         let count = 0;
 
         tailedFile.on('line', (line: string) => {
@@ -165,7 +166,7 @@ describe(`Tail (${impl})`, () => {
 
     describe('nLines', () => {
         it('should gracefully handle an empty file', { timeout: 5000 }, (t, done) => {
-            const tailedFile = new Tail(fileToTest, { nLines: 3, flushAtEOF: true, pollingInterval: 100 });
+            const tailedFile = new Tail(fileToTest, { ...TEST_DEFAULT_TAIL_OPTS, nLines: 3, flushAtEOF: true });
             tailedFile.unwatch();
             done();
         });
@@ -178,7 +179,7 @@ describe(`Tail (${impl})`, () => {
                 writeSync(fd, input);
 
                 const n = 3;
-                const tailedFile = new Tail(fileToTest, { nLines: n, flushAtEOF: true, pollingInterval: 100 });
+                const tailedFile = new Tail(fileToTest, { ...TEST_DEFAULT_TAIL_OPTS, nLines: n, flushAtEOF: true });
                 let counter = 1;
                 const toBePrinted = tokens.slice(tokens.length - n);
 
@@ -203,7 +204,7 @@ describe(`Tail (${impl})`, () => {
                 writeSync(fd, input);
 
                 const n = 3;
-                const tailedFile = new Tail(fileToTest, { nLines: n, flushAtEOF: true, pollingInterval: 100 });
+                const tailedFile = new Tail(fileToTest, { ...TEST_DEFAULT_TAIL_OPTS, nLines: n, flushAtEOF: true });
                 const toBePrinted = tokens.slice(tokens.length - n);
                 let counter = 1;
 
