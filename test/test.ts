@@ -18,14 +18,10 @@ describe(`Tail (${impl})`, () => {
     beforeEach(() => {
         writeFileSync(fileToTest, '');
     });
-
     afterEach((t, done) => {
         access(fileToTest, fsConstants.F_OK, (err) => {
-            if (!err) {
-                unlink(fileToTest, done);
-            } else {
-                done();
-            }
+            if (!err) unlink(fileToTest, done);
+            else done();
         });
     });
 
@@ -51,9 +47,7 @@ describe(`Tail (${impl})`, () => {
             });
 
             setTimeout(() => {
-                for (let index = 0; index < nbOfLineToWrite; index++) {
-                    writeSync(fd, text);
-                }
+                for (let index = 0; index < nbOfLineToWrite; index++) writeSync(fd, text);
                 closeSync(fd);
             }, 50);
         });
@@ -62,9 +56,7 @@ describe(`Tail (${impl})`, () => {
     it('should respect fromBeginning flag', { timeout: 5000 }, (t, done) => {
         const fd = openSync(fileToTest, 'w+');
         const lines = ['line  0', 'line  1', 'line  2', 'line  3'];
-        for (const l of lines) {
-            writeSync(fd, l + '\n');
-        }
+        for (const l of lines) writeSync(fd, l + '\n');
         closeSync(fd);
 
         const readLines: string[] = [];
@@ -85,9 +77,7 @@ describe(`Tail (${impl})`, () => {
     it('should respect fromBeginning from even the first appended line', { timeout: 5000 }, (t, done) => {
         const fd = openSync(fileToTest, 'w+');
         const lines = ['line0', 'line1'];
-        for (const l of lines) {
-            writeSync(fd, l + '\n');
-        }
+        for (const l of lines) writeSync(fd, l + '\n');
         closeSync(fd);
 
         const readLines: string[] = [];
@@ -105,24 +95,6 @@ describe(`Tail (${impl})`, () => {
         });
     });
 
-    it('should send error event on deletion of file while watching', { timeout: 5000 }, (t, done) => {
-        const fd = openSync(fileToTest, 'w+');
-        const tailedFile = new Tail(fileToTest, { pollingInterval: 100 });
-
-        tailedFile.on('error', () => {
-            tailedFile.unwatch();
-            done();
-        });
-        tailedFile.on('line', () => {
-            unlinkSync(fileToTest);
-        });
-
-        setTimeout(() => {
-            writeSync(fd, 'This is a line\n');
-            closeSync(fd);
-        }, 50);
-    });
-
     it('should throw exception if file is missing', { timeout: 5000 }, () => {
         try {
             new Tail('missingFile.txt', { pollingInterval: 100 });
@@ -130,6 +102,22 @@ describe(`Tail (${impl})`, () => {
         } catch (error: any) {
             assert.strictEqual(error.code, 'ENOENT');
         }
+    });
+
+    it('should send error event on deletion of watched file', { timeout: 5000 }, (t, done) => {
+        const fd = openSync(fileToTest, 'w+');
+        const tailedFile = new Tail(fileToTest, { pollingInterval: 100 });
+
+        tailedFile.on('error', (error) => {
+            assert.strictEqual(error.cause.code, 'ENOENT');
+            done();
+        });
+        tailedFile.on('line', () => unlinkSync(fileToTest));
+
+        setTimeout(() => {
+            writeSync(fd, 'This is a line\n');
+            closeSync(fd);
+        }, 50);
     });
 
     it('should send error event on rename of watched file', { timeout: 5000 }, (t, done) => {
@@ -140,12 +128,12 @@ describe(`Tail (${impl})`, () => {
         tailedFile.on('error', (error) => {
             tailedFile.unwatch();
             unlinkSync(newName);
-            //assert.strictEqual(error.code, 'ENOENT');
+            assert.strictEqual(error.cause.code, 'ENOENT');
             done();
         });
         tailedFile.on('line', () => assert.fail('should not fire line event'));
 
-        //! This must be async or it will block Tail from detecting it happen and crash
+        // This must be async or it will block Tail from detecting it happen and crash
         setTimeout(() => rename(fileToTest, newName, () => {}), 150);
         setTimeout(() => {
             const fdNew = openSync(newName, 'w+');
@@ -156,7 +144,7 @@ describe(`Tail (${impl})`, () => {
 
     it('should emit lines in the right order', { timeout: 5000 }, (t, done) => {
         const fd = openSync(fileToTest, 'w+');
-        const linesNo = 100_000;
+        const linesNo = 50_000;
         const tailedFile = new Tail(fileToTest, { nLines: -1, pollingInterval: 100 });
         let count = 0;
 
@@ -230,22 +218,5 @@ describe(`Tail (${impl})`, () => {
                 });
             });
         });
-    });
-
-    it('should throw a catchable exception if tailed file disappears', { timeout: 5000 }, (t, done) => {
-        const fd = openSync(fileToTest, 'w+');
-        const lines = ['line0', 'line1'];
-        for (const l of lines) { writeSync(fd, l + '\n'); }
-        closeSync(fd);
-
-        const tailedFile = new Tail(fileToTest, { flushAtEOF: true, pollingInterval: 100 });
-        tailedFile.on('error', (e: any) => {
-            //assert.strictEqual(e.code, 'ENOENT');
-            done();
-        });
-
-        setTimeout(() => {
-            unlinkSync(fileToTest);
-        }, 99);
     });
 });

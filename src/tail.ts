@@ -53,21 +53,17 @@ export class Tail extends EventEmitter {
 
         let cursor: number | null = null;
 
-        if (nLines < 0) {
-            cursor = 0; // read from beginning of file
-        } else if (nLines === 0) {
-            cursor = this.#getCurrentFilePos(); // read from current position (no readback)
-        } else {
-            cursor = this.#getPositionAtNthLine(nLines); // readback from specific line
-        }
+        if (nLines < 0) cursor = 0; // read from beginning of file
+        else if (nLines === 0) cursor = this.#getCurrentFilePos(); // read from current position (no readback)
+        else cursor = this.#getPositionAtNthLine(nLines); // readback from specific line
+
         if (cursor === null) throw new Error(`Tail failed to initialize for ${this.#filename}`);
         this.#currentCursorPos = cursor;
 
+        // force an initial file flush if backreading.
+        if (nLines !== 0) this.#change();
+        
         try {
-            // force a file flush if backreading.
-            const flush = nLines !== 0;
-            if (flush) this.#change();
-
             const useWatchFile = options.forcePolling ?? Tail.DEFAULT_USE_POLLING;
             // Start watching
             if (!useWatchFile) {
@@ -81,9 +77,9 @@ export class Tail extends EventEmitter {
                     this.#watchFileEvent(curr, prev);
                 });
             }
-        } catch (err) {
+        } catch (error) {
             this.unwatch();
-            this.emit('error', `Tail watching for ${this.#filename} failed: ${err}`);
+            this.emit('error', new Error(`Tail watching for ${this.#filename} failed.`, { cause: error }));
         }
     }
 
@@ -173,10 +169,10 @@ export class Tail extends EventEmitter {
     #getCurrentFilePos() {
         try {
             return fs.statSync(this.#filename).size;
-        } catch (error: any) {
+        } catch (error) {
             this.unwatch();
-            this.emit('error', 'File not available anymore.');
-            return null; // likely caught in the middle of a rename operation
+            this.emit('error', new Error('File not available anymore.', { cause: error }));
+            return null;
         }
     }
 
@@ -191,7 +187,7 @@ export class Tail extends EventEmitter {
             end: block.end - 1,
             encoding: this.#encoding,
         });
-        stream.on('error', (error) => this.emit('error', error));
+        stream.on('error', (error) => this.emit('error', new Error('ReadStream error', { cause: error })));
         stream.on('end', () => {
             this.#queue.shift();
             if (this.#queue.length > 0) this.#internalDispatcher.emit('next');
@@ -229,9 +225,9 @@ export class Tail extends EventEmitter {
         if (evtName === 'rename') {
             try {
                 fs.accessSync(this.#filename, fs.constants.R_OK);
-            } catch {
+            } catch (error) {
                 this.unwatch();
-                this.emit('error', `'rename' event. File not available anymore.`);
+                this.emit('error', new Error('File not available anymore.', { cause: error }));
             }
         }
     }
@@ -239,7 +235,7 @@ export class Tail extends EventEmitter {
     #watchFileEvent(curr: fs.Stats, prev: fs.Stats) {
         if (curr.nlink === 0) { // rename event
             this.unwatch();
-            this.emit('error', `'rename' event. File not available anymore.`);
+            this.emit('error', new Error('File not available anymore.', { cause: { code: 'ENOENT', syscall: 'stat', path: this.#filename } }));
             return;
         }
         if (curr.size > prev.size) { // change event
