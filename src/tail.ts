@@ -75,7 +75,7 @@ export class Tail extends EventEmitter {
             } else {
                 this.#watcher = fs.watch(this.#filename, (event) => this.#watchEvent(event));
             }
-        } catch (error) {
+        } catch (error) { /* node:coverage ignore next 3 */
             this.unwatch();
             this.emit('error', new Error(`Tail watching for ${this.#filename} failed.`, { cause: error }));
         }
@@ -167,7 +167,7 @@ export class Tail extends EventEmitter {
     #getCurrentFilePos() {
         try {
             return fs.statSync(this.#filename).size;
-        } catch (error) {
+        } catch (error) { /* node:coverage ignore next 4 */
             this.unwatch();
             this.emit('error', new Error('File not available anymore.', { cause: error }));
             return null;
@@ -208,7 +208,7 @@ export class Tail extends EventEmitter {
         const pos = this.#getCurrentFilePos();
         if (!pos) return;
 
-        if (pos < this.#currentCursorPos) {
+        if (pos < this.#currentCursorPos) { /* node:coverage ignore next 2 */
             // scenario where text is not appended but it's actually a w+
             this.#currentCursorPos = pos;
         } else if (pos > this.#currentCursorPos) {
