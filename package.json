@@ -27,7 +27,8 @@
     },
     "scripts": {
         "build": "tsc --declaration",
-        "test": "node --import tsx --test --experimental-test-coverage ./test/test.ts"
+        "test": "node --import tsx --test --experimental-test-coverage ./test/test.ts",
+        "test-only": "node --import tsx --test --test-only --experimental-test-coverage ./test/test.ts"
     },
     "license": "MIT",
     "devDependencies": {

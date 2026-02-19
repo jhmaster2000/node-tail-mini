@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it, beforeEach, afterEach } from 'node:test';
-import { access, unlink, writeFile, constants as fsConstants, openSync, writeSync, closeSync, unlinkSync, rename } from 'node:fs';
+import { access, unlink, constants as fsConstants, openSync, writeSync, closeSync, unlinkSync, rename, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Tail } from '../src/tail.js';
@@ -8,9 +8,15 @@ import { Tail } from '../src/tail.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fileToTest = join(__dirname, 'example.txt');
 
-describe('Tail', () => {
-    beforeEach((t, done) => {
-        writeFile(fileToTest, '', done);
+const implementations = ['watch', 'watchFile'] as const;
+const impl: string = 'watchFile';
+
+describe(`Tail (${impl})`, () => {
+    if (impl === 'watch') Tail.DEFAULT_USE_WATCH_FILE = false;
+    if (impl === 'watchFile') Tail.DEFAULT_USE_WATCH_FILE = true;
+
+    beforeEach(() => {
+        writeFileSync(fileToTest, '');
     });
 
     afterEach((t, done) => {
@@ -26,13 +32,13 @@ describe('Tail', () => {
     const lineEndings = [{ le: '\r\n', desc: 'Windows' }, { le: '\n', desc: 'Linux' }];
 
     lineEndings.forEach(({ le, desc }) => {
-        it(`should read a file with ${desc} line ending`, (t, done) => {
+        it(`should read a file with ${desc} line ending`, { timeout: 5000 }, (t, done) => {
             const text = `This is a ${desc} line ending  ${le}`;
             const nbOfLineToWrite = 100;
             let nbOfReadLines = 0;
 
             const fd = openSync(fileToTest, 'w+');
-            const tailedFile = new Tail(fileToTest, { fsWatchOptions: { interval: 100 } });
+            const tailedFile = new Tail(fileToTest, { pollingInterval: 100 });
 
             tailedFile.on('line', (line) => {
                 assert.strictEqual(line, text.replace(/[\r\n]/g, ''));
@@ -44,30 +50,16 @@ describe('Tail', () => {
                 }
             });
 
-            for (let index = 0; index < nbOfLineToWrite; index++) {
-                writeSync(fd, text);
-            }
-            closeSync(fd);
+            setTimeout(() => {
+                for (let index = 0; index < nbOfLineToWrite; index++) {
+                    writeSync(fd, text);
+                }
+                closeSync(fd);
+            }, 50);
         });
     });
 
-    it('should handle null separator option to not split chunks', (t, done) => {
-        const text = 'This is \xA9test and 22\xB0 C';
-        const fd = openSync(fileToTest, 'w+');
-        const tailedFile = new Tail(fileToTest, { separator: null, fsWatchOptions: { interval: 100 } });
-
-        tailedFile.on('line', (line) => {
-            assert.strictEqual(line, `${text}${text}`);
-            tailedFile.unwatch();
-            done();
-        });
-
-        writeSync(fd, text);
-        writeSync(fd, text);
-        closeSync(fd);
-    });
-
-    it('should respect fromBeginning flag', { timeout: 10000 }, (t, done) => {
+    it('should respect fromBeginning flag', { timeout: 5000 }, (t, done) => {
         const fd = openSync(fileToTest, 'w+');
         const lines = ['line  0', 'line  1', 'line  2', 'line  3'];
         for (const l of lines) {
@@ -77,22 +69,20 @@ describe('Tail', () => {
 
         const readLines: string[] = [];
 
-        setTimeout(() => {
-            const tailedFile = new Tail(fileToTest, { fromBeginning: true });
-            tailedFile.on('line', (line: string) => {
-                readLines.push(line);
-                if (readLines.length === lines.length) {
-                    const match = readLines.every((val, idx) => val === lines[idx]);
-                    if (match) {
-                        tailedFile.unwatch();
-                        done();
-                    }
+        const tailedFile = new Tail(fileToTest, { fromBeginning: true });
+        tailedFile.on('line', (line: string) => {
+            readLines.push(line);
+            if (readLines.length === lines.length) {
+                const match = readLines.every((val, idx) => val === lines[idx]);
+                if (match) {
+                    tailedFile.unwatch();
+                    done();
                 }
-            });
-        }, 3000);
+            }
+        });
     });
 
-    it('should respect fromBeginning from even the first appended line', (t, done) => {
+    it('should respect fromBeginning from even the first appended line', { timeout: 5000 }, (t, done) => {
         const fd = openSync(fileToTest, 'w+');
         const lines = ['line0', 'line1'];
         for (const l of lines) {
@@ -101,7 +91,7 @@ describe('Tail', () => {
         closeSync(fd);
 
         const readLines: string[] = [];
-        const tailedFile = new Tail(fileToTest, { fromBeginning: true, fsWatchOptions: { interval: 100 } });
+        const tailedFile = new Tail(fileToTest, { fromBeginning: true, pollingInterval: 100 });
 
         tailedFile.on('line', (line) => {
             readLines.push(line);
@@ -115,9 +105,9 @@ describe('Tail', () => {
         });
     });
 
-    it('should send error event on deletion of file while watching', (t, done) => {
+    it('should send error event on deletion of file while watching', { timeout: 5000 }, (t, done) => {
         const fd = openSync(fileToTest, 'w+');
-        const tailedFile = new Tail(fileToTest, { fsWatchOptions: { interval: 100 } });
+        const tailedFile = new Tail(fileToTest, { pollingInterval: 100 });
 
         tailedFile.on('error', () => {
             tailedFile.unwatch();
@@ -127,13 +117,15 @@ describe('Tail', () => {
             unlinkSync(fileToTest);
         });
 
-        writeSync(fd, 'This is a line\n');
-        closeSync(fd);
+        setTimeout(() => {
+            writeSync(fd, 'This is a line\n');
+            closeSync(fd);
+        }, 50);
     });
 
-    it('should throw exception if file is missing', () => {
+    it('should throw exception if file is missing', { timeout: 5000 }, () => {
         try {
-            new Tail('missingFile.txt', { fsWatchOptions: { interval: 100 } });
+            new Tail('missingFile.txt', { pollingInterval: 100 });
             assert.fail('Should have thrown an error');
         } catch (ex: any) {
             assert.strictEqual(ex.code, 'ENOENT');
@@ -142,29 +134,31 @@ describe('Tail', () => {
 
     it('should deal with file rename', { timeout: 5000 }, (t, done) => {
         const text = 'This is a line\n';
-        const tailedFile = new Tail(fileToTest, { fsWatchOptions: { interval: 100 } });
+        const tailedFile = new Tail(fileToTest, { pollingInterval: 100 });
         const newName = join(__dirname, 'example2.txt');
 
         tailedFile.on('line', () => {
             tailedFile.unwatch();
-            try { unlinkSync(newName); } catch {}
+            unlinkSync(newName);
             done();
         });
 
-        //! This must be async or it will block Tail from detecting it happen and crash
-        rename(fileToTest, newName, () => {});
+        setTimeout(() => {
+            //! This must be async or it will block Tail from detecting it happen and crash
+            rename(fileToTest, newName, () => {});
+        }, 99);
 
         setTimeout(() => {
             const fdNew = openSync(newName, 'w+');
             writeSync(fdNew, text);
             closeSync(fdNew);
-        }, 1500);
+        }, 150);
     });
 
-    it('should emit lines in the right order', (t, done) => {
+    it('should emit lines in the right order', { timeout: 5000 }, (t, done) => {
         const fd = openSync(fileToTest, 'w+');
         const linesNo = 250000;
-        const tailedFile = new Tail(fileToTest, { fromBeginning: true, fsWatchOptions: { interval: 100 } });
+        const tailedFile = new Tail(fileToTest, { fromBeginning: true, pollingInterval: 100 });
         let count = 0;
 
         tailedFile.on('line', (line: string) => {
@@ -176,18 +170,19 @@ describe('Tail', () => {
             }
         });
 
-        for (let i = 0; i < linesNo; i++) {
-            writeSync(fd, `${i}\n`);
-        }
-        closeSync(fd);
+        setTimeout(() => {
+            for (let i = 0; i < linesNo; i++) writeSync(fd, `${i}\n`);
+            closeSync(fd);
+        });
     });
 
-    it('should not lose data between rename events', { timeout: 10000 }, (t, done) => {
+    it('should not lose data between rename events', { timeout: 5000 }, (t, done) => {
         const fd = openSync(fileToTest, 'w+');
         const newName = join(__dirname, 'example2.txt');
 
-        const tailedFile = new Tail(fileToTest, { fromBeginning: true, fsWatchOptions: { interval: 100 } });
+        const tailedFile = new Tail(fileToTest, { fromBeginning: true, pollingInterval: 100 });
         let readNo = 0;
+        let id: NodeJS.Timeout;
 
         tailedFile.on('line', (line: string) => {
             assert.strictEqual(line, readNo.toString());
@@ -202,31 +197,33 @@ describe('Tail', () => {
             }
         });
 
-        let writeNo = 0;
-        const id = setInterval(() => {
-            writeSync(fd, `${writeNo}\n`);
-            writeNo++;
-        }, 50);
+        setTimeout(() => {
+            let writeNo = 0;
+            id = setInterval(() => {
+                writeSync(fd, `${writeNo}\n`);
+                writeNo++;
+            }, 50);
+        }, 99);
 
         setTimeout(() => rename(fileToTest, newName, () => {}), 250);
     });
 
     describe('nLines', () => {
-        it('should gracefully handle an empty file', (t, done) => {
-            const tailedFile = new Tail(fileToTest, { nLines: 3, flushAtEOF: true, fsWatchOptions: { interval: 100 } });
+        it('should gracefully handle an empty file', { timeout: 5000 }, (t, done) => {
+            const tailedFile = new Tail(fileToTest, { nLines: 3, flushAtEOF: true, pollingInterval: 100 });
             tailedFile.unwatch();
             done();
         });
 
         lineEndings.forEach(({ le, desc }) => {
-            it(`should respect nLines when ${desc} line endings ends with a newline`, (t, done) => {
+            it(`should respect nLines when ${desc} line endings ends with a newline`, { timeout: 5000 }, (t, done) => {
                 const fd = openSync(fileToTest, 'w+');
                 const tokens = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
                 const input = tokens.reduce((acc, n) => `${acc}${n}${le}`, '');
                 writeSync(fd, input);
 
                 const n = 3;
-                const tailedFile = new Tail(fileToTest, { nLines: n, flushAtEOF: true, fsWatchOptions: { interval: 100 } });
+                const tailedFile = new Tail(fileToTest, { nLines: n, flushAtEOF: true, pollingInterval: 100 });
                 let counter = 1;
                 const toBePrinted = tokens.slice(tokens.length - n);
 
@@ -241,7 +238,7 @@ describe('Tail', () => {
                 });
             });
 
-            it(`should respect nLines when ${desc} line endings does not end with newline`, (t, done) => {
+            it(`should respect nLines when ${desc} line endings does not end with newline`, { timeout: 5000 }, (t, done) => {
                 const fd = openSync(fileToTest, 'w+');
                 const tokens = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
                 const input = tokens.reduce((acc, n, i) => {
@@ -251,7 +248,7 @@ describe('Tail', () => {
                 writeSync(fd, input);
 
                 const n = 3;
-                const tailedFile = new Tail(fileToTest, { nLines: n, flushAtEOF: true, fsWatchOptions: { interval: 100 } });
+                const tailedFile = new Tail(fileToTest, { nLines: n, flushAtEOF: true, pollingInterval: 100 });
                 const toBePrinted = tokens.slice(tokens.length - n);
                 let counter = 1;
 
@@ -268,20 +265,20 @@ describe('Tail', () => {
         });
     });
 
-    it('should throw a catchable exception if tailed file disappears', (t, done) => {
+    it('should throw a catchable exception if tailed file disappears', { timeout: 5000 }, (t, done) => {
         const fd = openSync(fileToTest, 'w+');
         const lines = ['line0', 'line1'];
         for (const l of lines) { writeSync(fd, l + '\n'); }
         closeSync(fd);
 
-        const tailedFile = new Tail(fileToTest, { flushAtEOF: true, fsWatchOptions: { interval: 100 } });
+        const tailedFile = new Tail(fileToTest, { flushAtEOF: true, pollingInterval: 100 });
         tailedFile.on('error', (e: any) => {
             assert.strictEqual(e.code, 'ENOENT');
             done();
         });
 
         setTimeout(() => {
-            try { unlinkSync(fileToTest); } catch {}
-        }, 2000);
+            unlinkSync(fileToTest);
+        }, 99);
     });
 });

@@ -2,13 +2,9 @@ import { EventEmitter } from 'node:events';
 import { dirname, join } from 'node:path';
 import fs from 'node:fs';
 
-interface FSWatchOptions {
-    interval: number;
-}
-
 export interface TailOptions {
-    separator?: string | RegExp | null;
-    fsWatchOptions?: FSWatchOptions;
+    separator?: string | RegExp;
+    pollingInterval?: number;
     follow?: boolean;
     useWatchFile?: boolean;
     flushAtEOF?: boolean;
@@ -18,78 +14,67 @@ export interface TailOptions {
 }
 
 interface QueueItem {
-    start: number;
-    end: number;
-}
-
-interface Cursor {
-    size: number;
+    readonly start: number;
+    readonly end: number;
 }
 
 export class Tail extends EventEmitter {
     #filename: string;
-    #absPath: string;
-    #separator?: string | RegExp | null;
-    #fsWatchOptions: any;
-    #follow: boolean;
-    #useWatchFile: boolean;
-    #flushAtEOF: boolean;
-    #encoding: BufferEncoding;
-    #nLines?: number;
+    readonly #separator: string | RegExp;
+    readonly #pollingInterval: number;
+    readonly #follow: boolean;
+    readonly #useWatchFile: boolean;
+    readonly #flushAtEOF: boolean;
+    readonly #encoding: BufferEncoding;
     #rewatchId: NodeJS.Timeout | undefined;
     #isWatching: boolean;
     #queue: QueueItem[] = [];
     #buffer: string;
     #watcher?: fs.FSWatcher;
-    #internalDispatcher: EventEmitter;
+    readonly #internalDispatcher: EventEmitter;
     #currentCursorPos: number = 0;
+
+    static DEFAULT_USE_WATCH_FILE = false;
 
     constructor(filename: string, options: TailOptions = {}) {
         super();
         this.#filename = filename;
-        this.#absPath = dirname(this.#filename);
-        this.#separator =
-            options.separator !== undefined ? options.separator : /[\r]{0,1}\n/; // null is a valid param
-        this.#fsWatchOptions = options.fsWatchOptions || {};
+        this.#separator = options.separator ?? /\r?\n/;
+        this.#pollingInterval = options.pollingInterval ?? 1000;
         this.#follow = options.follow ?? true;
-        this.#useWatchFile = options.useWatchFile || false;
-        this.#flushAtEOF = options.flushAtEOF || false;
-        this.#encoding = options.encoding || 'utf-8';
-        const fromBeginning = options.fromBeginning || false;
-        this.#nLines = options.nLines ?? 0;
+        this.#useWatchFile = options.useWatchFile ?? Tail.DEFAULT_USE_WATCH_FILE;
+        this.#flushAtEOF = options.flushAtEOF ?? false;
+        this.#encoding = options.encoding ?? 'utf-8';
+        const nLines = options.nLines ?? 0;
+        const fromBeginning = options.fromBeginning ?? false;
 
         try {
             fs.accessSync(this.#filename, fs.constants.F_OK);
         } catch (err: any) {
-            if (err.code == 'ENOENT') {
-                throw err;
-            }
+            if (err.code === 'ENOENT') throw err;
         }
 
         this.#buffer = '';
-        this.#internalDispatcher = new EventEmitter();
         this.#isWatching = false;
 
-        // this.internalDispatcher.on('next',this.readBlock);
-        this.#internalDispatcher.on('next', () => {
-            this.#readBlock();
-        });
+        this.#internalDispatcher = new EventEmitter();
+        this.#internalDispatcher.on('next', () => this.#readBlock());
 
-        let cursor;
+        let cursor: number;
 
         if (fromBeginning) {
             cursor = 0;
-        } else if (this.#nLines <= 0) {
+        } else if (nLines <= 0) {
             cursor = 0;
-        } else if (this.#nLines !== undefined) {
-            cursor = this.#getPositionAtNthLine(this.#nLines);
+        } else if (nLines !== undefined) {
+            cursor = this.#getPositionAtNthLine(nLines);
         } else {
             cursor = this.#latestPosition();
         }
 
         if (cursor === undefined) throw new Error('Tail can\'t initialize.');
 
-        const flush = fromBeginning || this.#nLines != undefined;
+        const flush = fromBeginning || nLines !== undefined;
         try {
             this.watch(cursor, flush);
         } catch (err) {
@@ -112,50 +97,36 @@ export class Tail extends EventEmitter {
          */
         const getLastMatch = (
             haystack: string,
-            needle: string | RegExp | null
+            needle: string | RegExp
         ): string | undefined => {
-            // NOTE `as string` was used to cast the needle to string, but it can be null as well. Just making TS compiler happy
-            const matches = haystack.match(needle as string);
-            if (matches === null) {
-                return;
-            }
+            const matches = haystack.match(needle);
+            if (matches === null) return;
 
             return matches[matches.length - 1];
         };
-        // NOTE `as string` was used to cast the needle to string, but it can be null as well. Just making TS compiler happy
-        const endSep = getLastMatch(text, this.#separator as string);
+        const endSep = getLastMatch(text, this.#separator);
 
         if (!endSep) return null;
 
         const endSepIndex = text.lastIndexOf(endSep);
-        let lastLine;
+        let lastLine: string;
 
         if (text.endsWith(endSep)) {
-            // If the text ends with a separator, look back further to find the next
-            // separator to complete the line
-
+            // If the text ends with a separator, look back further to find the next separator to complete the line
             const trimmed = text.substring(0, endSepIndex);
-            // NOTE `as string` was used to cast the needle to string, but it can be null as well. Just making TS compiler happy
-            const startSep = getLastMatch(trimmed, this.#separator as string);
+            const startSep = getLastMatch(trimmed, this.#separator);
 
-            // If there isn't another separator, the line isn't complete so
-            // so return null to get more data
-
-            if (!startSep) {
-                return null;
-            }
-
+            // If there isn't another separator, the line isn't complete, so return null to get more data
+            if (!startSep) return null;
             const startSepIndex = trimmed.lastIndexOf(startSep);
 
             // Exclude the starting separator, include the ending separator
-
             lastLine = text.substring(
                 startSepIndex + startSep.length,
                 endSepIndex + endSep.length
             );
         } else {
-            // If the text does not end with a separator, grab everything after
-            // the last separator
+            // If the text does not end with a separator, grab everything after the last separator
             lastLine = text.substring(endSepIndex + endSep.length);
         }
 
@@ -170,10 +141,7 @@ export class Tail extends EventEmitter {
      */
     #getPositionAtNthLine(nLines: number): number {
         const { size } = fs.statSync(this.#filename);
-
-        if (size === 0) {
-            return 0;
-        }
+        if (size === 0) return 0;
 
         const fd = fs.openSync(this.#filename, 'r');
         // Start from the end of the file and work backwards in specific chunks
@@ -189,9 +157,7 @@ export class Tail extends EventEmitter {
 
             // If negative, we've reached the beginning of the file and we should stop and return 0, starting the
             // stream at the beginning.
-            if (currentReadPosition < 0) {
-                return 0;
-            }
+            if (currentReadPosition < 0) return 0;
 
             // Read a chunk of the file and prepend it to the working buffer
             const buffer = Buffer.alloc(chunkSizeBytes);
@@ -203,12 +169,8 @@ export class Tail extends EventEmitter {
                 currentReadPosition // position in file to read from
             );
 
-            // .subarray returns Uint8Array in node versions < 16.x and Buffer
-            // in versions >= 16.x. To support both, allocate a new buffer with
-            // Buffer.from which accepts both types
             const readArray = buffer.subarray(0, bytesRead);
-            remaining =
-                Buffer.from(readArray).toString(this.#encoding) + remaining;
+            remaining = readArray.toString(this.#encoding) + remaining;
 
             let index = this.#getIndexOfLastLine(remaining);
 
@@ -237,113 +199,72 @@ export class Tail extends EventEmitter {
     }
 
     #readBlock() {
-        if (this.#queue.length >= 1) {
-            const block = this.#queue[0];
-            if (block!.end > block.start) {
-                let stream = fs.createReadStream(this.#filename, {
-                    start: block.start,
-                    end: block.end - 1,
-                    encoding: this.#encoding,
-                });
-                stream.on('error', (error) => {
-                    this.emit('error', error);
-                });
-                stream.on('end', () => {
-                    let _ = this.#queue.shift();
-                    if (this.#queue.length > 0) {
-                        this.#internalDispatcher.emit('next');
-                    }
-                    if (this.#flushAtEOF && this.#buffer.length > 0) {
-                        this.emit('line', this.#buffer);
-                        this.#buffer = '';
-                    }
-                });
-                stream.on('data', (d) => {
-                    if (this.#separator === null) {
-                        this.emit('line', d);
-                    } else {
-                        this.#buffer += d;
-                        // NOTE `as string` was used to cast the needle to string, but it can be null as well. Just making TS compiler happy
-                        let parts = this.#buffer.split(this.#separator as string);
-                        // NOTE Since parts.pop could return undefined, i'm returning a empty string when that happens
-                        this.#buffer = parts.pop() ?? '';
-                        for (const chunk of parts) {
-                            this.emit('line', chunk);
-                        }
-                    }
-                });
+        if (this.#queue.length === 0) return;
+
+        const block = this.#queue[0];
+        if (block.end <= block.start) return;
+
+        const stream = fs.createReadStream(this.#filename, {
+            start: block.start,
+            end: block.end - 1,
+            encoding: this.#encoding,
+        });
+        stream.on('error', (error) => this.emit('error', error));
+        stream.on('end', () => {
+            this.#queue.shift();
+            if (this.#queue.length > 0) this.#internalDispatcher.emit('next');
+
+            if (this.#flushAtEOF && this.#buffer.length > 0) {
+                this.emit('line', this.#buffer);
+                this.#buffer = '';
             }
-        }
+        });
+        stream.on('data', (d) => {
+            this.#buffer += d;
+            const parts = this.#buffer.split(this.#separator);
+            this.#buffer = parts.pop() ?? '';
+            for (const chunk of parts) this.emit('line', chunk);
+        });
+
     }
 
     #change() {
-        let p = this.#latestPosition();
-        if (p < this.#currentCursorPos) {
+        const pos = this.#latestPosition();
+        if (pos < this.#currentCursorPos) {
             // scenario where text is not appended but it's actually a w+
-            this.#currentCursorPos = p;
-        } else if (p > this.#currentCursorPos) {
-            this.#queue.push({ start: this.#currentCursorPos, end: p });
-            this.#currentCursorPos = p;
-            if (this.#queue.length == 1) {
-                this.#internalDispatcher.emit('next');
-            }
+            this.#currentCursorPos = pos;
+        } else if (pos > this.#currentCursorPos) {
+            this.#queue.push({ start: this.#currentCursorPos, end: pos });
+            this.#currentCursorPos = pos;
+            if (this.#queue.length === 1) this.#internalDispatcher.emit('next');
         }
     }
 
-    watch(startingCursor: number, flush?: boolean) {
-        if (this.#isWatching) return;
-
-        this.#isWatching = true;
-        this.#currentCursorPos = startingCursor;
-        // force a file flush is either fromBegining or nLines flags were passed.
-        if (flush) this.#change();
-
-        if (!this.#useWatchFile) {
-            this.#watcher = fs.watch(
-                this.#filename,
-                this.#fsWatchOptions,
-                (e, filename) => {
-                    if (!filename) throw new Error('assertion failed'); //! wip
-                    // NOTE Filename here is a `Buffer`, how it's used as a string?
-                    // NOTE Test if filename.toString changes the behavior
-                    this.#watchEvent(e, filename.toString());
-                }
-            );
-        } else {
-            fs.watchFile(this.#filename, this.#fsWatchOptions, (curr, prev) => {
-                this.#watchFileEvent(curr, prev);
-            });
-        }
-    }
-
-    #rename(filename: string) {
+    #rename(filename: string | null) {
+        if (filename === this.#filename) return; // rename event but same filename
         // TODO
         // MacOS sometimes throws a rename event for no reason.
         // Different platforms might behave differently.
         // see https://nodejs.org/api/fs.html#fs_fs_watch_filename_options_listener
         // filename might not be present.
         // https://nodejs.org/api/fs.html#fs_filename_argument
-        // Better solution would be check inode but it will require a timeout and
-        // a sync file read.
-        if (filename === undefined || filename !== this.#filename) {
-            this.unwatch();
-            if (this.#follow) {
-                this.#filename = join(this.#absPath, filename);
-                this.#rewatchId = setTimeout(() => {
-                    try {
-                        this.watch(this.#currentCursorPos);
-                    } catch (ex) {
-                        this.emit('error', ex);
-                    }
-                }, 1000);
-            } else {
-                this.emit('error', `'rename' event for ${this.#filename}. File not available anymore.`);
-            }
+        // Better solution would be check inode but it will require a timeout and a sync file read.
+        this.unwatch();
+        if (this.#follow && filename) {
+            this.#filename = join(dirname(this.#filename), filename);
+            this.#rewatchId = setTimeout(() => {
+                try {
+                    this.watch(this.#currentCursorPos);
+                } catch (ex) {
+                    this.emit('error', ex);
+                }
+            }, 1000);
+        } else {
+            this.emit('error', `'rename' event for ${this.#filename}. File not available anymore.`);
         }
-        // else: rename event but same filename
     }
 
-    #watchEvent(evtName: 'change' | 'rename', evtFilename: string) {
+    #watchEvent(evtName: 'change' | 'rename', evtFilename: string | null) {
         try {
             if (evtName === 'change') {
                 this.#change();
@@ -355,27 +276,43 @@ export class Tail extends EventEmitter {
         }
     }
 
-    #watchFileEvent(curr: Cursor, prev: Cursor) {
+    #watchFileEvent(curr: fs.Stats, prev: fs.Stats) {
         if (curr.size > prev.size) {
             this.#currentCursorPos = curr.size; // Update this.currentCursorPos so that a consumer can determine if entire file has been handled
             this.#queue.push({ start: prev.size, end: curr.size });
-            if (this.#queue.length == 1) {
-                this.#internalDispatcher.emit('next');
-            }
+            if (this.#queue.length === 1) this.#internalDispatcher.emit('next');
         }
     }
 
-    unwatch() {
-        if (this.#watcher) {
-            this.#watcher.close();
+    public watch(startingCursor: number, flush?: boolean) {
+        if (this.#isWatching) return;
+        this.#isWatching = true;
+        this.#currentCursorPos = startingCursor;
+
+        // force a file flush is either fromBegining or nLines flags were passed.
+        if (flush) this.#change();
+
+        if (!this.#useWatchFile) {
+            this.#watcher = fs.watch(this.#filename, (e, filename) => {
+                this.#watchEvent(e, filename);
+            });
         } else {
-            fs.unwatchFile(this.#filename);
+            const fswf_opts = { interval: this.#pollingInterval };
+            fs.watchFile(this.#filename, fswf_opts, (curr, prev) => {
+                this.#watchFileEvent(curr, prev);
+            });
         }
+    }
+
+    public unwatch() {
+        if (this.#watcher) this.#watcher.close();
+        else fs.unwatchFile(this.#filename);
+
         if (this.#rewatchId) {
             clearTimeout(this.#rewatchId);
             this.#rewatchId = undefined;
         }
         this.#isWatching = false;
-        this.#queue = []; // TODO: is this correct behaviour?
+        this.#queue = [];
     }
 }
