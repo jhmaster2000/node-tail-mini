@@ -1,19 +1,19 @@
 import { EventEmitter } from 'node:events';
-import { dirname, join } from 'node:path';
+import { resolve } from 'node:path';
 import fs from 'node:fs';
 
 export interface TailOptions {
     separator?: string | RegExp;
-    pollingInterval?: number;
-    forcePolling?: boolean;
-    flushAtEOF?: boolean;
     encoding?: BufferEncoding;
+    flushAtEOF?: boolean;
+    forcePolling?: boolean;
+    pollingInterval?: number;
     /**
      * Number of existing lines to readback on tail start.
      * 
      * Set to `-1` to read from the beginning of the file (default).
      * 
-     * Set to `0` for no readback. */ 
+     * Set to `0` for no readback. */
     nLines?: number;
 }
 
@@ -23,57 +23,67 @@ interface QueueItem {
 }
 
 export class Tail extends EventEmitter {
-    #filename: string;
+    readonly #filename: string;
     readonly #separator: string | RegExp;
-    readonly #pollingInterval: number;
-    readonly #usingWatchFile: boolean;
     readonly #flushAtEOF: boolean;
     readonly #encoding: BufferEncoding;
-    #rewatchId: NodeJS.Timeout | undefined;
-    #isWatching: boolean;
-    #queue: QueueItem[] = [];
-    #buffer: string;
-    #watcher?: fs.FSWatcher;
+    readonly #queue: QueueItem[] = [];
+    readonly #watcher?: fs.FSWatcher;
     readonly #internalDispatcher: EventEmitter;
+    #buffer: string;
     #currentCursorPos: number = 0;
+    #unwatched: boolean = false;
 
     static DEFAULT_USE_POLLING = false;
 
     constructor(filename: string, options: TailOptions = {}) {
         super();
-        this.#filename = filename;
+        this.#filename = resolve(filename);
         this.#separator = options.separator ?? /\r?\n/;
-        this.#pollingInterval = options.pollingInterval ?? 1000;
-        this.#usingWatchFile = options.forcePolling ?? Tail.DEFAULT_USE_POLLING;
-        this.#flushAtEOF = options.flushAtEOF ?? false;
         this.#encoding = options.encoding ?? 'utf-8';
+        this.#flushAtEOF = options.flushAtEOF ?? false;
         const nLines = options.nLines ?? -1;
 
         fs.accessSync(this.#filename, fs.constants.R_OK);
 
         this.#buffer = '';
-        this.#isWatching = false;
 
         this.#internalDispatcher = new EventEmitter();
         this.#internalDispatcher.on('next', () => this.#readBlock());
 
-        let cursor: number;
+        let cursor: number | null = null;
 
         if (nLines < 0) {
             cursor = 0; // read from beginning of file
         } else if (nLines === 0) {
-            cursor = this.#latestPosition(); // read from current position (no readback)
+            cursor = this.#getCurrentFilePos(); // read from current position (no readback)
         } else {
             cursor = this.#getPositionAtNthLine(nLines); // readback from specific line
         }
+        if (cursor === null) throw new Error(`Tail failed to initialize for ${this.#filename}`);
+        this.#currentCursorPos = cursor;
 
-        if (cursor === undefined) throw new Error('Tail failed to initialize.');
-
-        const flush = nLines !== 0;
         try {
-            this.watch(cursor, flush);
+            // force a file flush if backreading.
+            const flush = nLines !== 0;
+            if (flush) this.#change();
+
+            const useWatchFile = options.forcePolling ?? Tail.DEFAULT_USE_POLLING;
+            // Start watching
+            if (!useWatchFile) {
+                this.#watcher = fs.watch(this.#filename, (e) => {
+                    this.#watchEvent(e);
+                });
+            }
+            else {
+                const interval = options.pollingInterval ?? 1000;
+                fs.watchFile(this.#filename, { interval }, (curr, prev) => {
+                    this.#watchFileEvent(curr, prev);
+                });
+            }
         } catch (err) {
-            this.emit('error', `watch for ${this.#filename} failed: ${err}`);
+            this.unwatch();
+            this.emit('error', `Tail watching for ${this.#filename} failed: ${err}`);
         }
     }
 
@@ -160,12 +170,13 @@ export class Tail extends EventEmitter {
         return size - lineBytes.reduce((acc, cur) => acc + cur, 0);
     }
 
-    #latestPosition() {
+    #getCurrentFilePos() {
         try {
             return fs.statSync(this.#filename).size;
-        } catch (err) {
-            this.emit('error', `size check for ${this.#filename} failed: ${err}`);
-            throw err;
+        } catch (error: any) {
+            this.unwatch();
+            this.emit('error', 'File not available anymore.');
+            return null; // likely caught in the middle of a rename operation
         }
     }
 
@@ -200,7 +211,9 @@ export class Tail extends EventEmitter {
     }
 
     #change() {
-        const pos = this.#latestPosition();
+        const pos = this.#getCurrentFilePos();
+        if (!pos) return;
+
         if (pos < this.#currentCursorPos) {
             // scenario where text is not appended but it's actually a w+
             this.#currentCursorPos = pos;
@@ -211,73 +224,37 @@ export class Tail extends EventEmitter {
         }
     }
 
-    #rename(filename: string | null) {
-        if (filename === this.#filename) return; // rename event but same filename
-
-        this.unwatch();
-        if (filename) {
-            this.#filename = join(dirname(this.#filename), filename);
-            this.#rewatchId = setTimeout(() => {
-                try {
-                    this.watch(this.#currentCursorPos);
-                } catch (ex) {
-                    this.emit('error', ex);
-                }
-            }, 1000);
-        } else {
-            this.emit('error', `'rename' event for ${this.#filename}. File not available anymore.`);
-        }
-    }
-
-    #watchEvent(evtName: 'change' | 'rename', evtFilename: string | null) {
-        try {
-            if (evtName === 'change') {
-                this.#change();
-            } else if (evtName === 'rename') {
-                this.#rename(evtFilename);
+    #watchEvent(evtName: 'change' | 'rename') {
+        if (evtName === 'change') return this.#change();
+        if (evtName === 'rename') {
+            try {
+                fs.accessSync(this.#filename, fs.constants.R_OK);
+            } catch {
+                this.unwatch();
+                this.emit('error', `'rename' event. File not available anymore.`);
             }
-        } catch (err) {
-            this.emit('error', `watchEvent for ${this.#filename} failed: ${err}`);
         }
     }
 
     #watchFileEvent(curr: fs.Stats, prev: fs.Stats) {
-        if (curr.size > prev.size) {
+        if (curr.nlink === 0) { // rename event
+            this.unwatch();
+            this.emit('error', `'rename' event. File not available anymore.`);
+            return;
+        }
+        if (curr.size > prev.size) { // change event
             this.#currentCursorPos = curr.size; // Update this.currentCursorPos so that a consumer can determine if entire file has been handled
             this.#queue.push({ start: prev.size, end: curr.size });
             if (this.#queue.length === 1) this.#internalDispatcher.emit('next');
         }
     }
 
-    public watch(startingCursor: number, flush?: boolean) {
-        if (this.#isWatching) return;
-        this.#isWatching = true;
-        this.#currentCursorPos = startingCursor;
-
-        // force a file flush is either fromBegining or nLines flags were passed.
-        if (flush) this.#change();
-
-        if (!this.#usingWatchFile) {
-            this.#watcher = fs.watch(this.#filename, (e, filename) => {
-                this.#watchEvent(e, filename);
-            });
-        } else {
-            const fswf_opts = { interval: this.#pollingInterval };
-            fs.watchFile(this.#filename, fswf_opts, (curr, prev) => {
-                this.#watchFileEvent(curr, prev);
-            });
-        }
-    }
-
     public unwatch() {
+        if (this.#unwatched) return;
+
         if (this.#watcher) this.#watcher.close();
         else fs.unwatchFile(this.#filename);
-
-        if (this.#rewatchId) {
-            clearTimeout(this.#rewatchId);
-            this.#rewatchId = undefined;
-        }
-        this.#isWatching = false;
-        this.#queue = [];
+        this.#queue.length = 0;
+        this.#unwatched = true;
     }
 }
