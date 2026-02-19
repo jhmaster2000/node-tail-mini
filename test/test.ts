@@ -9,11 +9,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const fileToTest = join(__dirname, 'example.txt');
 
 const implementations = ['watch', 'watchFile'] as const;
-const impl: string = 'watchFile';
+const impl: string = 'watch';
 
 describe(`Tail (${impl})`, () => {
-    if (impl === 'watch') Tail.DEFAULT_USE_WATCH_FILE = false;
-    if (impl === 'watchFile') Tail.DEFAULT_USE_WATCH_FILE = true;
+    if (impl === 'watch') Tail.DEFAULT_USE_POLLING = false;
+    if (impl === 'watchFile') Tail.DEFAULT_USE_POLLING = true;
 
     beforeEach(() => {
         writeFileSync(fileToTest, '');
@@ -69,7 +69,7 @@ describe(`Tail (${impl})`, () => {
 
         const readLines: string[] = [];
 
-        const tailedFile = new Tail(fileToTest, { fromBeginning: true });
+        const tailedFile = new Tail(fileToTest, { nLines: -1 });
         tailedFile.on('line', (line: string) => {
             readLines.push(line);
             if (readLines.length === lines.length) {
@@ -91,7 +91,7 @@ describe(`Tail (${impl})`, () => {
         closeSync(fd);
 
         const readLines: string[] = [];
-        const tailedFile = new Tail(fileToTest, { fromBeginning: true, pollingInterval: 100 });
+        const tailedFile = new Tail(fileToTest, { nLines: -1, pollingInterval: 100 });
 
         tailedFile.on('line', (line) => {
             readLines.push(line);
@@ -158,7 +158,7 @@ describe(`Tail (${impl})`, () => {
     it('should emit lines in the right order', { timeout: 5000 }, (t, done) => {
         const fd = openSync(fileToTest, 'w+');
         const linesNo = 250000;
-        const tailedFile = new Tail(fileToTest, { fromBeginning: true, pollingInterval: 100 });
+        const tailedFile = new Tail(fileToTest, { nLines: -1, pollingInterval: 100 });
         let count = 0;
 
         tailedFile.on('line', (line: string) => {
@@ -180,7 +180,7 @@ describe(`Tail (${impl})`, () => {
         const fd = openSync(fileToTest, 'w+');
         const newName = join(__dirname, 'example2.txt');
 
-        const tailedFile = new Tail(fileToTest, { fromBeginning: true, pollingInterval: 100 });
+        const tailedFile = new Tail(fileToTest, { nLines: -1, pollingInterval: 100 });
         let readNo = 0;
         let id: NodeJS.Timeout;
 

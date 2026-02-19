@@ -5,11 +5,15 @@ import fs from 'node:fs';
 export interface TailOptions {
     separator?: string | RegExp;
     pollingInterval?: number;
-    follow?: boolean;
-    useWatchFile?: boolean;
+    forcePolling?: boolean;
     flushAtEOF?: boolean;
     encoding?: BufferEncoding;
-    fromBeginning?: boolean;
+    /**
+     * Number of existing lines to readback on tail start.
+     * 
+     * Set to `-1` to read from the beginning of the file (default).
+     * 
+     * Set to `0` for no readback. */ 
     nLines?: number;
 }
 
@@ -22,8 +26,7 @@ export class Tail extends EventEmitter {
     #filename: string;
     readonly #separator: string | RegExp;
     readonly #pollingInterval: number;
-    readonly #follow: boolean;
-    readonly #useWatchFile: boolean;
+    readonly #usingWatchFile: boolean;
     readonly #flushAtEOF: boolean;
     readonly #encoding: BufferEncoding;
     #rewatchId: NodeJS.Timeout | undefined;
@@ -34,25 +37,19 @@ export class Tail extends EventEmitter {
     readonly #internalDispatcher: EventEmitter;
     #currentCursorPos: number = 0;
 
-    static DEFAULT_USE_WATCH_FILE = false;
+    static DEFAULT_USE_POLLING = false;
 
     constructor(filename: string, options: TailOptions = {}) {
         super();
         this.#filename = filename;
         this.#separator = options.separator ?? /\r?\n/;
         this.#pollingInterval = options.pollingInterval ?? 1000;
-        this.#follow = options.follow ?? true;
-        this.#useWatchFile = options.useWatchFile ?? Tail.DEFAULT_USE_WATCH_FILE;
+        this.#usingWatchFile = options.forcePolling ?? Tail.DEFAULT_USE_POLLING;
         this.#flushAtEOF = options.flushAtEOF ?? false;
         this.#encoding = options.encoding ?? 'utf-8';
-        const nLines = options.nLines ?? 0;
-        const fromBeginning = options.fromBeginning ?? false;
+        const nLines = options.nLines ?? -1;
 
-        try {
-            fs.accessSync(this.#filename, fs.constants.F_OK);
-        } catch (err: any) {
-            if (err.code === 'ENOENT') throw err;
-        }
+        fs.accessSync(this.#filename, fs.constants.R_OK);
 
         this.#buffer = '';
         this.#isWatching = false;
@@ -62,19 +59,17 @@ export class Tail extends EventEmitter {
 
         let cursor: number;
 
-        if (fromBeginning) {
-            cursor = 0;
-        } else if (nLines <= 0) {
-            cursor = 0;
-        } else if (nLines !== undefined) {
-            cursor = this.#getPositionAtNthLine(nLines);
+        if (nLines < 0) {
+            cursor = 0; // read from beginning of file
+        } else if (nLines === 0) {
+            cursor = this.#latestPosition(); // read from current position (no readback)
         } else {
-            cursor = this.#latestPosition();
+            cursor = this.#getPositionAtNthLine(nLines); // readback from specific line
         }
 
-        if (cursor === undefined) throw new Error('Tail can\'t initialize.');
+        if (cursor === undefined) throw new Error('Tail failed to initialize.');
 
-        const flush = fromBeginning || nLines !== undefined;
+        const flush = nLines !== 0;
         try {
             this.watch(cursor, flush);
         } catch (err) {
@@ -82,30 +77,11 @@ export class Tail extends EventEmitter {
         }
     }
 
-    /**
-     * Grabs the index of the last line of text in the format /.*(\n)?/.
-     * Returns null if a full line can not be found.
-     * @param {string} text
-     * @returns {number | null}
-     */
+    /** 
+     * Grabs the index of the last line of text in the format `/.*(\n)?/`.
+     * Returns null if a full line can not be found. */
     #getIndexOfLastLine(text: string): number | null {
-        /**
-         * Helper function get the last match as string
-         * @param {string} haystack
-         * @param {string | RegExp} needle
-         * @returns {string | undefined}
-         */
-        const getLastMatch = (
-            haystack: string,
-            needle: string | RegExp
-        ): string | undefined => {
-            const matches = haystack.match(needle);
-            if (matches === null) return;
-
-            return matches[matches.length - 1];
-        };
-        const endSep = getLastMatch(text, this.#separator);
-
+        const endSep = text.match(this.#separator)?.at(-1);
         if (!endSep) return null;
 
         const endSepIndex = text.lastIndexOf(endSep);
@@ -114,7 +90,7 @@ export class Tail extends EventEmitter {
         if (text.endsWith(endSep)) {
             // If the text ends with a separator, look back further to find the next separator to complete the line
             const trimmed = text.substring(0, endSepIndex);
-            const startSep = getLastMatch(trimmed, this.#separator);
+            const startSep = trimmed.match(this.#separator)?.at(-1);
 
             // If there isn't another separator, the line isn't complete, so return null to get more data
             if (!startSep) return null;
@@ -129,16 +105,12 @@ export class Tail extends EventEmitter {
             // If the text does not end with a separator, grab everything after the last separator
             lastLine = text.substring(endSepIndex + endSep.length);
         }
-
         return text.lastIndexOf(lastLine);
     }
 
     /**
      * Returns the position of the start of the `nLines`th line from the bottom.
-     * Returns 0 if `nLines` is greater than the total number of lines in the file.
-     * @param {number} nLines
-     * @returns {number}
-     */
+     * Returns 0 if `nLines` is greater than the total number of lines in the file. */
     #getPositionAtNthLine(nLines: number): number {
         const { size } = fs.statSync(this.#filename);
         if (size === 0) return 0;
@@ -155,8 +127,7 @@ export class Tail extends EventEmitter {
             // Shift the current read position backward to the amount we're about to read
             currentReadPosition -= chunkSizeBytes;
 
-            // If negative, we've reached the beginning of the file and we should stop and return 0, starting the
-            // stream at the beginning.
+            // If negative, we've reached the beginning of the file and we should stop and return 0, starting the stream at the beginning.
             if (currentReadPosition < 0) return 0;
 
             // Read a chunk of the file and prepend it to the working buffer
@@ -242,15 +213,9 @@ export class Tail extends EventEmitter {
 
     #rename(filename: string | null) {
         if (filename === this.#filename) return; // rename event but same filename
-        // TODO
-        // MacOS sometimes throws a rename event for no reason.
-        // Different platforms might behave differently.
-        // see https://nodejs.org/api/fs.html#fs_fs_watch_filename_options_listener
-        // filename might not be present.
-        // https://nodejs.org/api/fs.html#fs_filename_argument
-        // Better solution would be check inode but it will require a timeout and a sync file read.
+
         this.unwatch();
-        if (this.#follow && filename) {
+        if (filename) {
             this.#filename = join(dirname(this.#filename), filename);
             this.#rewatchId = setTimeout(() => {
                 try {
@@ -292,7 +257,7 @@ export class Tail extends EventEmitter {
         // force a file flush is either fromBegining or nLines flags were passed.
         if (flush) this.#change();
 
-        if (!this.#useWatchFile) {
+        if (!this.#usingWatchFile) {
             this.#watcher = fs.watch(this.#filename, (e, filename) => {
                 this.#watchEvent(e, filename);
             });
