@@ -31,8 +31,8 @@ export class Tail extends EventEmitter {
     readonly #encoding: BufferEncoding;
     readonly #queue: QueueItem[] = [];
     readonly #watcher?: fs.FSWatcher;
-    readonly #internalDispatcher: EventEmitter;
-    #buffer: string;
+    readonly #internalDispatcher = new EventEmitter();
+    #buffer: string = '';
     #currentCursorPos: number = 0;
     #unwatched: boolean = false;
 
@@ -42,19 +42,16 @@ export class Tail extends EventEmitter {
     constructor(filename: string, options: TailOptions = {}) {
         super();
         this.#filename = resolve(filename);
+        fs.accessSync(this.#filename, fs.constants.R_OK);
+
         this.#separator = options.separator ?? /\r?\n/;
         this.#encoding = options.encoding ?? 'utf-8';
         this.#flushAtEOF = options.flushAtEOF ?? false;
-        const nLines = options.nLines ?? -1;
-
-        fs.accessSync(this.#filename, fs.constants.R_OK);
-
-        this.#buffer = '';
-
-        this.#internalDispatcher = new EventEmitter();
+        
         this.#internalDispatcher.on('next', () => this.#readBlock());
-
+        
         let cursor: number | null = null;
+        const nLines = options.nLines ?? -1;
 
         if (nLines < 0) cursor = 0; // read from beginning of file
         else if (nLines === 0) cursor = this.#getCurrentFilePos(); // read from current position (no readback)
