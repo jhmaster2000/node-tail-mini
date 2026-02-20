@@ -162,8 +162,9 @@ export class Tail extends EventEmitter {
         if (newPos === undefined) return;
 
         if (newPos < this.#currentCursorPos) {
-            this.#currentCursorPos = newPos; // Handle file truncation
-        } else if (newPos > this.#currentCursorPos) {
+            this.#currentCursorPos = 0; // treat file truncation as overwrite/reset (matches GNU coreutils tail behavior)
+        }
+        if (newPos > this.#currentCursorPos) {
             this.#queue.push({ start: this.#currentCursorPos, end: newPos });
             this.#currentCursorPos = newPos;
             if (this.#queue.length === 1) this.#internalDispatcher.emit('next');
