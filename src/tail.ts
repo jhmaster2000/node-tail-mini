@@ -47,14 +47,14 @@ export class Tail extends EventEmitter {
 
         this.#internalDispatcher.on('next', () => this.#readBlock());
 
-        let cursor: number | null = null;
+        let cursor: number | undefined;
         const nLines = options.nLines ?? -1;
 
         if (nLines < 0) cursor = 0; // read from beginning of file
         else if (nLines === 0) cursor = this.#getCurrentFilePos(); // read from current position (no readback)
         else cursor = this.#getPositionAtNthLine(nLines); // readback from specific line
 
-        if (cursor === null) throw new Error(`Tail failed to initialize for ${this.#filename}`);
+        if (cursor === undefined) throw new Error(`Tail failed to initialize for ${this.#filename}`);
         this.#currentCursorPos = cursor;
 
         // force an initial file flush if backreading.
@@ -118,13 +118,12 @@ export class Tail extends EventEmitter {
         }
     }
 
+    /** Returns `undefined` on error. */
     #getCurrentFilePos() {
         try {
             return fs.statSync(this.#filename).size;
-        } catch (error) { /* node:coverage ignore next 4 */
-            this.unwatch();
-            this.emit('error', new Error('File not available anymore.', { cause: error }));
-            return null;
+        } catch (error) { /* node:coverage ignore next 2 */
+            this.#lostFile(error);
         }
     }
 
@@ -158,43 +157,41 @@ export class Tail extends EventEmitter {
 
     }
 
-    #change() {
-        const pos = this.#getCurrentFilePos();
-        if (!pos) return;
+    #change(newPos?: number) {
+        newPos ??= this.#getCurrentFilePos();
+        if (newPos === undefined) return;
 
-        if (pos < this.#currentCursorPos) { /* node:coverage ignore next 2 */
-            // scenario where text is not appended but it's actually a w+
-            this.#currentCursorPos = pos;
-        } else if (pos > this.#currentCursorPos) {
-            this.#queue.push({ start: this.#currentCursorPos, end: pos });
-            this.#currentCursorPos = pos;
+        if (newPos < this.#currentCursorPos) {
+            this.#currentCursorPos = newPos; // Handle file truncation
+        } else if (newPos > this.#currentCursorPos) {
+            this.#queue.push({ start: this.#currentCursorPos, end: newPos });
+            this.#currentCursorPos = newPos;
             if (this.#queue.length === 1) this.#internalDispatcher.emit('next');
         }
     }
 
     #onWatchEvent(evtName: 'change' | 'rename') {
+        // "change" event
         if (evtName === 'change') return this.#change();
-        if (evtName === 'rename') {
-            try {
-                fs.accessSync(this.#filename, fs.constants.R_OK);
-            } catch (error) {
-                this.unwatch();
-                this.emit('error', new Error('File not available anymore.', { cause: error }));
-            }
+        // "rename" event
+        try {
+            // explicitly check if rename event is real (macOS can falsely emit change events as "rename" ones)
+            fs.accessSync(this.#filename, fs.constants.R_OK);
+        } catch (error) {
+            this.#lostFile(error);
         }
     }
 
-    #onWatchFileEvent(curr: fs.Stats, prev: fs.Stats) {
-        if (curr.nlink === 0) { // rename event
-            this.unwatch();
-            this.emit('error', new Error('File not available anymore.', { cause: { code: 'ENOENT', syscall: 'stat', path: this.#filename } }));
-            return;
-        }
-        if (curr.size > prev.size) { // change event
-            this.#queue.push({ start: prev.size, end: curr.size });
-            this.#currentCursorPos = curr.size; // Update this.currentCursorPos so that a consumer can determine if entire file has been handled
-            if (this.#queue.length === 1) this.#internalDispatcher.emit('next');
-        }
+    #onWatchFileEvent(curr: fs.Stats, _prev: fs.Stats) {
+        // "change" event
+        if (curr.nlink !== 0) return this.#change(curr.size);
+        // "rename" event
+        this.#lostFile({ code: 'ENOENT', syscall: 'stat', path: this.#filename }); // fake ENOENT error
+    }
+
+    #lostFile(error: unknown) {
+        this.unwatch();
+        this.emit('error', new Error('File not available anymore.', { cause: error }));
     }
 
     public unwatch() {
