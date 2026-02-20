@@ -237,8 +237,8 @@ export class Tail extends EventEmitter {
             return;
         }
         if (curr.size > prev.size) { // change event
-            this.#currentCursorPos = curr.size; // Update this.currentCursorPos so that a consumer can determine if entire file has been handled
             this.#queue.push({ start: prev.size, end: curr.size });
+            this.#currentCursorPos = curr.size; // Update this.currentCursorPos so that a consumer can determine if entire file has been handled
             if (this.#queue.length === 1) this.#internalDispatcher.emit('next');
         }
     }
