@@ -175,7 +175,7 @@ for (const impl of ['watch', 'watchFile']) describe(`Tail (${impl})`, () => {
             it(`should respect nLines when ${desc} line endings ends with a newline`, { timeout: 5000 }, (t, done) => {
                 const fd = openSync(fileToTest, 'w+');
                 const tokens = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-                const input = tokens.reduce((acc, n) => `${acc}${n}${le}`, '');
+                const input = tokens.join(le) + le;
                 writeSync(fd, input);
 
                 const n = 3;
@@ -197,10 +197,7 @@ for (const impl of ['watch', 'watchFile']) describe(`Tail (${impl})`, () => {
             it(`should respect nLines when ${desc} line endings does not end with newline`, { timeout: 5000 }, (t, done) => {
                 const fd = openSync(fileToTest, 'w+');
                 const tokens = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-                const input = tokens.reduce((acc, n, i) => {
-                    const t = (i === tokens.length - 1) ? n : `${n}${le}`;
-                    return `${acc}${t}`;
-                }, '');
+                const input = tokens.join(le);
                 writeSync(fd, input);
 
                 const n = 3;
