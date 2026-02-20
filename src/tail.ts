@@ -4,7 +4,6 @@ import fs from 'node:fs';
 
 export interface TailOptions {
     separator?: string | RegExp;
-    encoding?: BufferEncoding;
     flushAtEOF?: boolean;
     /** Set to override the platform default choice between native and polling methods. */
     polling?: boolean;
@@ -28,7 +27,6 @@ export class Tail extends EventEmitter {
     readonly #filename: string;
     readonly #separator: string | RegExp;
     readonly #flushAtEOF: boolean;
-    readonly #encoding: BufferEncoding;
     readonly #queue: QueueItem[] = [];
     readonly #watcher?: fs.FSWatcher;
     readonly #internalDispatcher = new EventEmitter();
@@ -45,11 +43,10 @@ export class Tail extends EventEmitter {
         fs.accessSync(this.#filename, fs.constants.R_OK);
 
         this.#separator = options.separator ?? /\r?\n/;
-        this.#encoding = options.encoding ?? 'utf-8';
         this.#flushAtEOF = options.flushAtEOF ?? false;
-        
+
         this.#internalDispatcher.on('next', () => this.#readBlock());
-        
+
         let cursor: number | null = null;
         const nLines = options.nLines ?? -1;
 
@@ -68,45 +65,14 @@ export class Tail extends EventEmitter {
             // Start watching
             if (useWatchFile) {
                 const interval = options.pollingInterval ?? 1000;
-                fs.watchFile(this.#filename, { interval }, (curr, prev) => this.#watchFileEvent(curr, prev));
+                fs.watchFile(this.#filename, { interval }, (curr, prev) => this.#onWatchFileEvent(curr, prev));
             } else {
-                this.#watcher = fs.watch(this.#filename, (event) => this.#watchEvent(event));
+                this.#watcher = fs.watch(this.#filename, (event) => this.#onWatchEvent(event));
             }
         } catch (error) { /* node:coverage ignore next 3 */
             this.unwatch();
             this.emit('error', new Error(`Tail watching for ${this.#filename} failed.`, { cause: error }));
         }
-    }
-
-    /** 
-     * Grabs the index of the last line of text in the format `/.*(\n)?/`.
-     * Returns null if a full line can not be found. */
-    #getIndexOfLastLine(text: string): number | null {
-        const endSep = text.match(this.#separator)?.at(-1);
-        if (!endSep) return null;
-
-        const endSepIndex = text.lastIndexOf(endSep);
-        let lastLine: string;
-
-        if (text.endsWith(endSep)) {
-            // If the text ends with a separator, look back further to find the next separator to complete the line
-            const trimmed = text.substring(0, endSepIndex);
-            const startSep = trimmed.match(this.#separator)?.at(-1);
-
-            // If there isn't another separator, the line isn't complete, so return null to get more data
-            if (!startSep) return null;
-            const startSepIndex = trimmed.lastIndexOf(startSep);
-
-            // Exclude the starting separator, include the ending separator
-            lastLine = text.substring(
-                startSepIndex + startSep.length,
-                endSepIndex + endSep.length
-            );
-        } else {
-            // If the text does not end with a separator, grab everything after the last separator
-            lastLine = text.substring(endSepIndex + endSep.length);
-        }
-        return text.lastIndexOf(lastLine);
     }
 
     /**
@@ -118,49 +84,38 @@ export class Tail extends EventEmitter {
 
         const fd = fs.openSync(this.#filename, 'r');
         // Start from the end of the file and work backwards in specific chunks
+        let linesFound = 0;
         let currentReadPosition = size;
         const chunkSizeBytes = Math.min(1024, size);
-        const lineBytes = [];
-
-        let remaining = '';
-
+        const buffer = Buffer.alloc(chunkSizeBytes);
+        
         try {
-            while (lineBytes.length < nLines) {
-                // Shift the current read position backward to the amount we're about to read
-                currentReadPosition -= chunkSizeBytes;
+            // Check if the file ends with a newline. 
+            // If it DOES NOT, the text after the last newline counts as the first line.
+            const lastByte = Buffer.alloc(1);
+            fs.readSync(fd, lastByte, 0, 1, size - 1);
+            if (lastByte[0] !== 0x0A) linesFound = 1;
 
-                // If negative, we've reached the beginning of the file and we should stop and return 0, starting the stream at the beginning.
-                if (currentReadPosition < 0) return 0;
+            while (currentReadPosition > 0) {
+                const readSize = Math.min(chunkSizeBytes, currentReadPosition);
+                currentReadPosition -= readSize;
 
-                // Read a chunk of the file and prepend it to the working buffer
-                const buffer = Buffer.alloc(chunkSizeBytes);
-                const bytesRead = fs.readSync(
-                    fd,
-                    buffer,
-                    0, // position in buffer to write to
-                    chunkSizeBytes, // number of bytes to read
-                    currentReadPosition // position in file to read from
-                );
+                fs.readSync(fd, buffer, 0, readSize, currentReadPosition);
 
-                const readArray = buffer.subarray(0, bytesRead);
-                remaining = readArray.toString(this.#encoding) + remaining;
-
-                let index = this.#getIndexOfLastLine(remaining);
-
-                while (index !== null && lineBytes.length < nLines) {
-                    const line = remaining.substring(index);
-
-                    lineBytes.push(Buffer.byteLength(line));
-                    remaining = remaining.substring(0, index);
-
-                    index = this.#getIndexOfLastLine(remaining);
+                // Search backward through the chunk
+                for (let i = readSize - 1; i >= 0; i--) {
+                    if (buffer[i] === 0x0A) { // '\n'
+                        // If we've already found the requested number of lines, this newline marks the boundary.
+                        if (linesFound === nLines) return currentReadPosition + i + 1;
+                        linesFound++;
+                    }
                 }
             }
+            // If we exhausted the file before finding nLines, start from the beginning.
+            return 0;
         } finally {
             fs.closeSync(fd);
         }
-
-        return size - lineBytes.reduce((acc, cur) => acc + cur, 0);
     }
 
     #getCurrentFilePos() {
@@ -182,7 +137,7 @@ export class Tail extends EventEmitter {
         const stream = fs.createReadStream(this.#filename, {
             start: block.start,
             end: block.end - 1,
-            encoding: this.#encoding,
+            encoding: 'utf8',
         });
         stream.on('error', (error) => this.emit('error', new Error('ReadStream error', { cause: error })));
         stream.on('end', () => {
@@ -217,7 +172,7 @@ export class Tail extends EventEmitter {
         }
     }
 
-    #watchEvent(evtName: 'change' | 'rename') {
+    #onWatchEvent(evtName: 'change' | 'rename') {
         if (evtName === 'change') return this.#change();
         if (evtName === 'rename') {
             try {
@@ -229,7 +184,7 @@ export class Tail extends EventEmitter {
         }
     }
 
-    #watchFileEvent(curr: fs.Stats, prev: fs.Stats) {
+    #onWatchFileEvent(curr: fs.Stats, prev: fs.Stats) {
         if (curr.nlink === 0) { // rename event
             this.unwatch();
             this.emit('error', new Error('File not available anymore.', { cause: { code: 'ENOENT', syscall: 'stat', path: this.#filename } }));
@@ -244,9 +199,11 @@ export class Tail extends EventEmitter {
 
     public unwatch() {
         if (this.#unwatched) return;
-
         if (this.#watcher) this.#watcher.close();
         else fs.unwatchFile(this.#filename);
+
+        this.#internalDispatcher.removeAllListeners();
+        this.#buffer = '';
         this.#queue.length = 0;
         this.#unwatched = true;
     }
