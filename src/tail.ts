@@ -65,7 +65,7 @@ export class Tail extends EventEmitter {
 
         // force an initial file flush if backreading.
         if (nLines !== 0) this.#change();
-        
+
         try {
             const useWatchFile = options.polling ?? Tail.#POLLING_PREFERRED;
             // Start watching
@@ -127,39 +127,41 @@ export class Tail extends EventEmitter {
 
         let remaining = '';
 
-        while (lineBytes.length < nLines) {
-            // Shift the current read position backward to the amount we're about to read
-            currentReadPosition -= chunkSizeBytes;
+        try {
+            while (lineBytes.length < nLines) {
+                // Shift the current read position backward to the amount we're about to read
+                currentReadPosition -= chunkSizeBytes;
 
-            // If negative, we've reached the beginning of the file and we should stop and return 0, starting the stream at the beginning.
-            if (currentReadPosition < 0) return 0;
+                // If negative, we've reached the beginning of the file and we should stop and return 0, starting the stream at the beginning.
+                if (currentReadPosition < 0) return 0;
 
-            // Read a chunk of the file and prepend it to the working buffer
-            const buffer = Buffer.alloc(chunkSizeBytes);
-            const bytesRead = fs.readSync(
-                fd,
-                buffer,
-                0, // position in buffer to write to
-                chunkSizeBytes, // number of bytes to read
-                currentReadPosition // position in file to read from
-            );
+                // Read a chunk of the file and prepend it to the working buffer
+                const buffer = Buffer.alloc(chunkSizeBytes);
+                const bytesRead = fs.readSync(
+                    fd,
+                    buffer,
+                    0, // position in buffer to write to
+                    chunkSizeBytes, // number of bytes to read
+                    currentReadPosition // position in file to read from
+                );
 
-            const readArray = buffer.subarray(0, bytesRead);
-            remaining = readArray.toString(this.#encoding) + remaining;
+                const readArray = buffer.subarray(0, bytesRead);
+                remaining = readArray.toString(this.#encoding) + remaining;
 
-            let index = this.#getIndexOfLastLine(remaining);
+                let index = this.#getIndexOfLastLine(remaining);
 
-            while (index !== null && lineBytes.length < nLines) {
-                const line = remaining.substring(index);
+                while (index !== null && lineBytes.length < nLines) {
+                    const line = remaining.substring(index);
 
-                lineBytes.push(Buffer.byteLength(line));
-                remaining = remaining.substring(0, index);
+                    lineBytes.push(Buffer.byteLength(line));
+                    remaining = remaining.substring(0, index);
 
-                index = this.#getIndexOfLastLine(remaining);
+                    index = this.#getIndexOfLastLine(remaining);
+                }
             }
+        } finally {
+            fs.closeSync(fd);
         }
-
-        fs.closeSync(fd);
 
         return size - lineBytes.reduce((acc, cur) => acc + cur, 0);
     }
