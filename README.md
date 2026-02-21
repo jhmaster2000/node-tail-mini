@@ -1,122 +1,41 @@
-# Tail
+# Tail Mini
 
-The **zero** dependency Node.js module for tailing a file
+A slimmer modern TypeScript-native rewrite of [node-tail](https://github.com/lucagrulla/node-tail/), a zero dependency Node.js module for tailing a file.
 
-[![NPM](https://nodei.co/npm/tail.png?downloads=true&downloadRank=true)](https://nodei.co/npm/tail.png?downloads=true&downloadRank=true)
+![license](https://img.shields.io/github/license/mashape/apistatus.svg)
 
-[![license](https://img.shields.io/github/license/mashape/apistatus.svg)](https://github.com/lucagrulla/node-tail/blob/master/LICENSE)
-[![npm](https://img.shields.io/npm/v/tail.svg?style=plastic)](https://www.npmjs.com/package/tail)
-![npm](https://img.shields.io/npm/dm/tail.svg)
+## Installation & Use
 
-Made with ❤️ by [Luca Grulla](https://www.lucagrulla.com) 
+At the time of writing, I have mainly written this fork for personal use in a project only, and am not interested in publicly maintaining this as a library for general use on `npm`, so it is not hosted there (but I may do so in the future). This is also why documentation will be scarce, if any provided, but the class should be fairly straightforward to figure out.
 
-1. TOC
-{:toc}
+Since the project is a single file, I simply copy the `tail.ts` file into my relevant project's source folders.
 
-## Installation
+## Important
 
-```bash
-npm install tail
-```
+**Tail Mini** is *not* a drop-in replacement for the original `node-tail`, while some of the original API familiarity remains, many breaking changes have been made in favour of modernizing, performance and implementation size for my specific *basic* tailing needs, including several "advanced" features/options from the original package being entirely removed.
 
-## Use
-
-```javascript
-Tail = require("tail").Tail;
-
-tail = new Tail("fileToTail");
-
-tail.on("line", function(data) {
-  console.log(data);
-});
-
-tail.on("error", function(error) {
-  console.log("ERROR: ", error);
-});
-```
-
-If you want to stop tail:
-
-```javascript
-tail.unwatch()
-```
-
-To start watching again:
-
-```javascript
-tail.watch()
-```
-
-## Configuration
-
-The only mandatory parameter is the path to the file to tail.
-
-```javascript
-var fileToTail = "/path/to/fileToTail.txt";
-new Tail(fileToTail)
-```
-
-If the file is **missing or invalid** ```Tail``` constructor will throw an Exception and won't initialize.
-
-```javascript
-try {
-  new Tail("missingFile.txt")
-} catch (ex) {
-  console.log(ex)
-}
-```
-
-Optional parameters can be passed via a hash:
-
-```javascript
-var options= {separator: /[\r]{0,1}\n/, fromBeginning: false, fsWatchOptions: {}, follow: true, logger: console}
-new Tail(fileToTail, options)
-```
+## Documentation
 
 ### Constructor parameters
+```ts
+constructor(filepath: string, options?: TailOptions)
+```
+See JSDoc comments in `tail.ts`.
 
-* `separator`:  the line separator token (default: `/[\r]{0,1}\n/` to handle linux/mac (9+)/windows). Pass `null` for binary files with no line separator.
-* `fsWatchOptions`: the full set of options that can be passed to `fs.watch` as per node documentation (default: `{}`).
-* `fromBeginning`:  tail from the beginning of the file (default: `false`). If `fromBeginning` is true `nLines` will be ignored.
-* `follow`: simulate `tail -F` option. In the case the file is moved/renamed/logrotated, if set to `true`  will start tailing again after a 1 second delay; if set to `false` it will  emit an error event (default: `true`).
-* `logger`: a logger object(default: no logger). The passed logger should follow the following signature:
-  * `info([data][, ...])`
-  * `error([data][, ...])`
-* `nLines`: tail from the last n lines. (default: `undefined`). Ignored if `fromBeginning` is set to `true`. 
-* `useWatchFile`: if set to `true` will force the use of `fs.watchFile` over delegating to the library the choice between `fs.watch` and `fs.watchFile` (default: `false`).
-* `encoding`: the file encoding (default:`utf-8`).
-* `flushAtEOF`: set to `true` to force flush of content when end of file is reached. Useful when there's no separator character at the end of the file (default: `false`).
+### Emitted events
 
-## Emitted events
-
-`Tail` emits two events:
-
-* line
-
-```javascript
-tail.on("line", (data) => {
-  console.log(data)  
-})
+#### `line`
+The `data` will always be a completed well-formed UTF-8 string, unless you use the `flushIncomplete: true` option (formerly `flushAtEOF`), in which case the string may contain malformed UTF-8 characters at the ends if a multi-byte character is broken across different writes to the file for whatever reason.
+```ts
+tail.on('line', (data: string) => {
+  console.log(data);
+});
 ```
 
-* error
-
-```javascript
-tail.on("error", (err) => {
-  console.log(err)  
-})
+#### `error`
+The error emitted will always be an `Error` instance from tail with an attached `cause` with the underlying error (usually also an `Error`-like object, but not guaranteed).
+```ts
+tail.on('error', (err) => {
+  console.log(err, err.cause);
+});
 ```
-The error emitted is either the underlying exception or a descriptive string.
-
-## How to contribute
-Node Tail code repo is [here](https://github.com/lucagrulla/node-tail/)
-Tail is written in ES6. Pull Requests are welcome.
-
-## History
-
-Tail was born as part of a data firehose. Read more about that project [here](https://www.lucagrulla.com/posts/building-a-firehose-with-nodejs/).
-Tail originally was written in [CoffeeScript](https://coffeescript.org/). Since December 2020 it's pure ES6.
-
-## License
-
-MIT. Please see [License](https://github.com/lucagrulla/node-tail/blob/master/LICENSE) file for more details.
