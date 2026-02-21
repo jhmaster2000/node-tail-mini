@@ -33,6 +33,7 @@ interface QueueItem {
 }
 
 export class Tail extends EventEmitter {
+    readonly #fd: number;
     readonly #filename: string;
     readonly #flushIncomplete: boolean;
     readonly #queue: QueueItem[] = [];
@@ -48,7 +49,12 @@ export class Tail extends EventEmitter {
     constructor(filename: string, options: TailOptions = {}) {
         super();
         this.#filename = resolve(filename);
-        fs.accessSync(this.#filename, fs.constants.R_OK);
+        this.#fd = fs.openSync(this.#filename, 'r');
+
+        if (fs.fstatSync(this.#fd).isDirectory()) {
+            fs.closeSync(this.#fd);
+            throw new Error(`Cannot Tail a folder: ${this.#filename}`);
+        }
 
         this.#flushIncomplete = options.flushIncomplete ?? false;
 
@@ -61,7 +67,10 @@ export class Tail extends EventEmitter {
         else if (nLines === 0) cursor = this.#getCurrentFilePos(); // read from current position (no readback)
         else cursor = this.#getInitialPositionAtNthLine(nLines); // readback from specific line
 
-        if (cursor === undefined) throw new Error(`Tail failed to initialize for ${this.#filename}`);
+        if (cursor === undefined) { /* node:coverage ignore next 3 */
+            fs.closeSync(this.#fd);
+            throw new Error(`Tail failed to initialize for ${this.#filename}`);
+        }
         this.#currentCursorPos = cursor;
 
         // force an initial file flush if backreading.
@@ -85,7 +94,7 @@ export class Tail extends EventEmitter {
     /** Returns `undefined` on error. */
     #getCurrentFilePos() {
         try {
-            return fs.statSync(this.#filename).size;
+            return fs.fstatSync(this.#fd).size;
         } catch (error) { /* node:coverage ignore next 2 */
             this.#lostFile(error);
         }
@@ -95,41 +104,37 @@ export class Tail extends EventEmitter {
      * Returns the file position at the start of the `nLines`-th line from the bottom.
      * Returns 0 if `nLines` is greater than the total number of lines in the file. */
     #getInitialPositionAtNthLine(nLines: number): number {
-        const { size } = fs.statSync(this.#filename);
+        const { size } = fs.fstatSync(this.#fd);
         if (size === 0) return 0;
 
-        const fd = fs.openSync(this.#filename, 'r');
         const chunkSizeBytes = Math.min(1024, size);
         const buffer = Buffer.alloc(chunkSizeBytes);
+
+        // Check if the file ends with a newline. 
+        // If it DOES NOT, the text after the last newline counts as the first line.
+        const lastByte = Buffer.allocUnsafe(1);
+        fs.readSync(this.#fd, lastByte, 0, 1, size - 1);
+        let linesFound = lastByte[0] === 0x0A ? 0 : 1;
+        let currentReadPosition = size;
         
-        // Start from the end of the file and work backwards in specific chunks
-        try {
-            // Check if the file ends with a newline. 
-            // If it DOES NOT, the text after the last newline counts as the first line.
-            const lastByte = Buffer.allocUnsafe(1);
-            fs.readSync(fd, lastByte, 0, 1, size - 1);
-            let linesFound = lastByte[0] === 0x0A ? 0 : 1;
-            let currentReadPosition = size;
+        // Start from the end of the file and work backwards in chunks
+        while (currentReadPosition > 0) {
+            const readSize = Math.min(chunkSizeBytes, currentReadPosition);
+            currentReadPosition -= readSize;
 
-            while (currentReadPosition > 0) {
-                const readSize = Math.min(chunkSizeBytes, currentReadPosition);
-                currentReadPosition -= readSize;
+            fs.readSync(this.#fd, buffer, 0, readSize, currentReadPosition);
 
-                fs.readSync(fd, buffer, 0, readSize, currentReadPosition);
-
-                // Search backward through the chunk
-                for (let i = readSize - 1; i >= 0; i--) {
-                    if (buffer[i] === 0x0A) { // '\n'
-                        // If we've already found the requested number of lines, this newline marks the boundary.
-                        if (linesFound === nLines) return currentReadPosition + i + 1;
-                        linesFound++;
-                    }
+            // Search backward through the chunk
+            for (let i = readSize - 1; i >= 0; i--) {
+                if (buffer[i] === 0x0A) { // '\n'
+                    // If we've already found the requested number of lines, this newline marks the boundary.
+                    if (linesFound === nLines) return currentReadPosition + i + 1;
+                    linesFound++;
                 }
             }
-            return 0; // If we exhausted the file before finding nLines, start from the beginning.
-        } finally {
-            fs.closeSync(fd);
         }
+        return 0; // If we exhausted the file before finding nLines, start from the beginning.
+
     }
 
     #readBlock() {
@@ -138,9 +143,11 @@ export class Tail extends EventEmitter {
         const block = this.#queue[0];
         if (block.end <= block.start) return;
 
-        const stream = fs.createReadStream(this.#filename, {
+        const stream = fs.createReadStream('', {
             start: block.start,
             end: block.end - 1,
+            fd: this.#fd,
+            autoClose: false,
         });
         stream.on('data', (d) => {
             const chunk = d as Buffer;
@@ -215,6 +222,8 @@ export class Tail extends EventEmitter {
         if (this.#unwatched) return;
         if (this.#watcher) this.#watcher.close();
         else fs.unwatchFile(this.#filename);
+
+        fs.closeSync(this.#fd);
 
         this.#internalDispatcher.removeAllListeners();
         this.#buffer = Buffer.alloc(0);

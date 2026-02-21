@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it, beforeEach, afterEach } from 'node:test';
-import { access, unlink, constants as fsConstants, openSync, writeSync, closeSync, unlinkSync, rename, writeFileSync, ftruncateSync, appendFileSync, readFileSync, truncateSync } from 'node:fs';
+import { access, unlink, constants as fsConstants, openSync, writeSync, closeSync, unlinkSync, rename, writeFileSync, appendFileSync, truncateSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Tail, TailOptions } from '../src/tail.js';
@@ -102,6 +102,15 @@ for (const impl of ['watch', 'watchFile']) describe(`Tail (${impl})`, () => {
             assert.fail('Should have thrown an error');
         } catch (error: any) {
             assert.strictEqual(error.code, 'ENOENT');
+        }
+    });
+
+    it('should throw exception if file is directory', { timeout: 5000 }, () => {
+        try {
+            new Tail(__dirname, { ...TEST_DEFAULT_TAIL_OPTS });
+            assert.fail('Should have thrown an error');
+        } catch (error: any) {
+            assert.strictEqual(error.message.split(':')[0], 'Cannot Tail a folder');
         }
     });
 
