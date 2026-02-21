@@ -8,6 +8,8 @@ import { Tail, TailOptions } from '../src/tail.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEST_FILE = join(__dirname, 'example.txt');
 
+const lineEndings = [{ le: '\r\n', desc: 'CRLF' }, { le: '\n', desc: 'LF' }];
+
 for (const impl of ['watch', 'watchFile']) describe(`Tail (${impl})`, () => {
     const TEST_DEFAULT_TAIL_OPTS: TailOptions = {};
     if (impl === 'watch') TEST_DEFAULT_TAIL_OPTS.polling = false;
@@ -25,8 +27,6 @@ for (const impl of ['watch', 'watchFile']) describe(`Tail (${impl})`, () => {
             else done();
         });
     });
-
-    const lineEndings = [{ le: '\r\n', desc: 'Windows' }, { le: '\n', desc: 'Linux' }];
 
     lineEndings.forEach(({ le, desc }) => {
         it(`should read a file with ${desc} line ending`, { timeout: 5000 }, (t, done) => {
@@ -189,15 +189,45 @@ for (const impl of ['watch', 'watchFile']) describe(`Tail (${impl})`, () => {
             tailedFile.unwatch();
             done();
         });
+        // Partially truncate to something shorter
+        setTimeout(() => writeFileSync(TEST_FILE, 'short\r\n'));
+    });
 
-        setTimeout(() => { // Partially truncate to something shorter
-            writeFileSync(TEST_FILE, 'short\r\n');
-        }, 50);
+    it('should handle incomplete line writes (flush: true) correctly', { timeout: 5000 }, (t, done) => {
+        const tailedFile = new Tail(TEST_FILE, { ...TEST_DEFAULT_TAIL_OPTS, flushIncomplete: true });
+        let lineNo = 0;
+        tailedFile.on('line', (line) => {
+            lineNo++;
+            if (lineNo === 1) return assert.strictEqual(line, 'begin line');
+            if (lineNo === 2) return assert.strictEqual(line, '-end line');
+            assert.strictEqual(lineNo, 3);
+            assert.strictEqual(line, 'normal line');
+            tailedFile.unwatch();
+            done();
+        });
+        setTimeout(() => appendFileSync(TEST_FILE, 'begin line'), 50);
+        setTimeout(() => appendFileSync(TEST_FILE, '-end line\n'), 250);
+        setTimeout(() => appendFileSync(TEST_FILE, 'normal line\n'), 450);
+    });
+    it('should handle incomplete line writes (flush: false) correctly', { timeout: 5000 }, (t, done) => {
+        const tailedFile = new Tail(TEST_FILE, { ...TEST_DEFAULT_TAIL_OPTS, flushIncomplete: false });
+        let lineNo = 0;
+        tailedFile.on('line', (line) => {
+            lineNo++;
+            if (lineNo === 1) return assert.strictEqual(line, 'begin line-end line');
+            assert.strictEqual(lineNo, 2);
+            assert.strictEqual(line, 'normal line');
+            tailedFile.unwatch();
+            done();
+        });
+        setTimeout(() => appendFileSync(TEST_FILE, 'begin line'), 50);
+        setTimeout(() => appendFileSync(TEST_FILE, '-end line\n'), 250);
+        setTimeout(() => appendFileSync(TEST_FILE, 'normal line\n'), 450);
     });
 
     describe('nLines', () => {
         it('should gracefully handle an empty file', { timeout: 5000 }, (t, done) => {
-            const tailedFile = new Tail(TEST_FILE, { ...TEST_DEFAULT_TAIL_OPTS, nLines: 3, flushAtEOF: true });
+            const tailedFile = new Tail(TEST_FILE, { ...TEST_DEFAULT_TAIL_OPTS, nLines: 3, flushIncomplete: true });
             tailedFile.unwatch();
             done();
         });
@@ -210,7 +240,7 @@ for (const impl of ['watch', 'watchFile']) describe(`Tail (${impl})`, () => {
                 writeSync(fd, input);
 
                 const n = 3;
-                const tailedFile = new Tail(TEST_FILE, { ...TEST_DEFAULT_TAIL_OPTS, nLines: n, flushAtEOF: true });
+                const tailedFile = new Tail(TEST_FILE, { ...TEST_DEFAULT_TAIL_OPTS, nLines: n, flushIncomplete: true });
                 let counter = 1;
                 const toBePrinted = tokens.slice(tokens.length - n);
 
@@ -232,7 +262,7 @@ for (const impl of ['watch', 'watchFile']) describe(`Tail (${impl})`, () => {
                 writeSync(fd, input);
 
                 const n = 3;
-                const tailedFile = new Tail(TEST_FILE, { ...TEST_DEFAULT_TAIL_OPTS, nLines: n, flushAtEOF: true });
+                const tailedFile = new Tail(TEST_FILE, { ...TEST_DEFAULT_TAIL_OPTS, nLines: n, flushIncomplete: true });
                 const toBePrinted = tokens.slice(tokens.length - n);
                 let counter = 1;
 

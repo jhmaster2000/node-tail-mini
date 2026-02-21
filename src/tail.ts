@@ -3,18 +3,27 @@ import { resolve } from 'node:path';
 import fs from 'node:fs';
 
 export interface TailOptions {
-    separator?: string | RegExp;
-    flushAtEOF?: boolean;
+    /**
+     * Whether an incomplete line (without a newline) at the end of a write should emit a "line" event.
+     * 
+     * When `true`, the incomplete line is flushed across multiple "line" events immediately for each chunk written to the file.
+     * 
+     * When `false`, the incomplete line is cached and only flushed in full once a follow-up write completes it, as a single "line" event.
+     * @default false */
+    flushIncomplete?: boolean;
     /** Set to override the platform default choice between native and polling methods. */
     polling?: boolean;
-    /** Polling interval in milliseconds. Ignored if not using polling method. */
+    /**
+     * Polling interval in milliseconds. Ignored if not using polling method.
+     * @default 1000 */
     pollingInterval?: number;
     /**
      * Number of existing lines to readback on tail start.
      * 
      * Set to `-1` to read from the beginning of the file (default).
      * 
-     * Set to `0` for no readback. */
+     * Set to `0` for no readback.
+     * @default -1 */
     nLines?: number;
 }
 
@@ -25,12 +34,11 @@ interface QueueItem {
 
 export class Tail extends EventEmitter {
     readonly #filename: string;
-    readonly #separator: string | RegExp;
-    readonly #flushAtEOF: boolean;
+    readonly #flushIncomplete: boolean;
     readonly #queue: QueueItem[] = [];
-    readonly #watcher?: fs.FSWatcher;
     readonly #internalDispatcher = new EventEmitter();
-    #buffer: string = '';
+    readonly #watcher?: fs.FSWatcher;
+    #buffer: Buffer = Buffer.alloc(0);
     #currentCursorPos: number = 0;
     #unwatched: boolean = false;
 
@@ -42,8 +50,7 @@ export class Tail extends EventEmitter {
         this.#filename = resolve(filename);
         fs.accessSync(this.#filename, fs.constants.R_OK);
 
-        this.#separator = options.separator ?? /\r?\n/;
-        this.#flushAtEOF = options.flushAtEOF ?? false;
+        this.#flushIncomplete = options.flushIncomplete ?? false;
 
         this.#internalDispatcher.on('next', () => this.#readBlock());
 
@@ -88,11 +95,11 @@ export class Tail extends EventEmitter {
         let currentReadPosition = size;
         const chunkSizeBytes = Math.min(1024, size);
         const buffer = Buffer.alloc(chunkSizeBytes);
-        
+
         try {
             // Check if the file ends with a newline. 
             // If it DOES NOT, the text after the last newline counts as the first line.
-            const lastByte = Buffer.alloc(1);
+            const lastByte = Buffer.allocUnsafe(1);
             fs.readSync(fd, lastByte, 0, 1, size - 1);
             if (lastByte[0] !== 0x0A) linesFound = 1;
 
@@ -136,23 +143,38 @@ export class Tail extends EventEmitter {
         const stream = fs.createReadStream(this.#filename, {
             start: block.start,
             end: block.end - 1,
-            encoding: 'utf8',
         });
         stream.on('error', (error) => this.emit('error', new Error('ReadStream error', { cause: error })));
         stream.on('end', () => {
             this.#queue.shift();
             if (this.#queue.length > 0) this.#internalDispatcher.emit('next');
 
-            if (this.#flushAtEOF && this.#buffer.length > 0) {
-                this.emit('line', this.#buffer);
-                this.#buffer = '';
+            if (this.#flushIncomplete && this.#buffer.length > 0) {
+                this.emit('line', this.#buffer.toString('utf8'));
+                this.#buffer = Buffer.alloc(0);
             }
         });
         stream.on('data', (d) => {
-            this.#buffer += d;
-            const parts = this.#buffer.split(this.#separator);
-            this.#buffer = parts.pop() ?? '';
-            for (const chunk of parts) this.emit('line', chunk);
+            const chunk = d as Buffer;
+            this.#buffer = Buffer.concat([this.#buffer, chunk]);
+
+            let start = 0;
+            while (true) {
+                const idx = this.#buffer.indexOf(0x0A, start); // 0x0A = \n
+                if (idx === -1) break;
+
+                // Handle CRLF: check if the character before \n is \r (0x0D)
+                let end = idx;
+                if (end > start && this.#buffer[end - 1] === 0x0D) end--;
+
+                // Convert only the confirmed line to a string
+                const line = this.#buffer.toString('utf8', start, end);
+                this.emit('line', line);
+
+                start = idx + 1;
+            }
+            // Keep only the trailing partial line in the class buffer
+            if (start > 0) this.#buffer = this.#buffer.subarray(start);
         });
 
     }
@@ -201,7 +223,7 @@ export class Tail extends EventEmitter {
         else fs.unwatchFile(this.#filename);
 
         this.#internalDispatcher.removeAllListeners();
-        this.#buffer = '';
+        this.#buffer = Buffer.alloc(0);
         this.#queue.length = 0;
         this.#unwatched = true;
     }
