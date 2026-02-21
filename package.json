@@ -2,7 +2,7 @@
     "type": "module",
     "name": "tail-mini",
     "description": "Minimal lightweight modern tail utility.",
-    "version": "3.0.0",
+    "version": "3.0.1",
     "author": "jhmaster",
     "contributors": [
         "Luca Grulla",
