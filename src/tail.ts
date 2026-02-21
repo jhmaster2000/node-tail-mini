@@ -168,7 +168,7 @@ export class Tail extends EventEmitter {
                 pos = LF + 1;
             }
             // Keep only the trailing partial line in the class buffer
-            if (pos > 0) this.#buffer = this.#buffer.subarray(pos);
+            if (pos > 0) this.#buffer = Buffer.from(this.#buffer.subarray(pos));
         });
         stream.on('end', () => {
             this.#queue.shift();
@@ -223,7 +223,7 @@ export class Tail extends EventEmitter {
         if (this.#watcher) this.#watcher.close();
         else fs.unwatchFile(this.#filename);
 
-        fs.closeSync(this.#fd);
+        try { fs.closeSync(this.#fd); } catch {}
 
         this.#internalDispatcher.removeAllListeners();
         this.#buffer = Buffer.alloc(0);
