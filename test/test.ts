@@ -167,13 +167,13 @@ for (const impl of ['watch', 'watchFile']) describe(`Tail (${impl})`, () => {
     it('should handle truncation correctly', { timeout: 5000 }, (t, done) => {
         writeFileSync(TEST_FILE, 'totally long string of data\r\n'); // Initial data
         const tailedFile = new Tail(TEST_FILE, { ...TEST_DEFAULT_TAIL_OPTS, nLines: 0 });
-        
+
         tailedFile.on('line', (line) => {
             assert.strictEqual(line, 'totally newer content'); // by design, previous data will print again after a truncation
             tailedFile.unwatch();
             done();
         });
-        
+
         setTimeout(() => { // Partially truncate to something shorter
             truncateSync(TEST_FILE, 8);
             appendFileSync(TEST_FILE, 'newer content\r\n');
@@ -223,6 +223,28 @@ for (const impl of ['watch', 'watchFile']) describe(`Tail (${impl})`, () => {
         setTimeout(() => appendFileSync(TEST_FILE, 'begin line'), 50);
         setTimeout(() => appendFileSync(TEST_FILE, '-end line\n'), 250);
         setTimeout(() => appendFileSync(TEST_FILE, 'normal line\n'), 450);
+    });
+
+    it('should correctly handle multi-byte UTF-8 characters', { timeout: 5000 }, (t, done) => {
+        const fd = openSync(TEST_FILE, 'w+');
+        const tailedFile = new Tail(TEST_FILE, { ...TEST_DEFAULT_TAIL_OPTS, flushIncomplete: false }); // this will never be able to work in flushIncomplete: true mode
+
+        // The Fire Emoji (🔥) is 4 bytes: [0xF0, 0x9F, 0x94, 0xA5]
+        const part1 = Buffer.concat([Buffer.from('Emoji: '), Buffer.from([0xf0, 0x9f])]);
+        const part2 = Buffer.concat([Buffer.from([0x94, 0xa5]), Buffer.from('!\n')]);
+
+        tailedFile.on('line', (line) => {
+            assert.strictEqual(line, 'Emoji: 🔥!');
+            tailedFile.unwatch();
+            closeSync(fd);
+            done();
+        });
+        // Step 1: Write the first half of the emoji
+        setTimeout(() => {
+            writeSync(fd, part1);
+            // Step 2: Write the second half and the newline to trigger the 'line' event
+            setTimeout(() => writeSync(fd, part2), 50);
+        }, 50);
     });
 
     describe('nLines', () => {

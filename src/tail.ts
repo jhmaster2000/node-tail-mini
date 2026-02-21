@@ -59,7 +59,7 @@ export class Tail extends EventEmitter {
 
         if (nLines < 0) cursor = 0; // read from beginning of file
         else if (nLines === 0) cursor = this.#getCurrentFilePos(); // read from current position (no readback)
-        else cursor = this.#getPositionAtNthLine(nLines); // readback from specific line
+        else cursor = this.#getInitialPositionAtNthLine(nLines); // readback from specific line
 
         if (cursor === undefined) throw new Error(`Tail failed to initialize for ${this.#filename}`);
         this.#currentCursorPos = cursor;
@@ -82,10 +82,19 @@ export class Tail extends EventEmitter {
         }
     }
 
+    /** Returns `undefined` on error. */
+    #getCurrentFilePos() {
+        try {
+            return fs.statSync(this.#filename).size;
+        } catch (error) { /* node:coverage ignore next 2 */
+            this.#lostFile(error);
+        }
+    }
+
     /**
-     * Returns the position of the start of the `nLines`th line from the bottom.
+     * Returns the file position at the start of the `nLines`-th line from the bottom.
      * Returns 0 if `nLines` is greater than the total number of lines in the file. */
-    #getPositionAtNthLine(nLines: number): number {
+    #getInitialPositionAtNthLine(nLines: number): number {
         const { size } = fs.statSync(this.#filename);
         if (size === 0) return 0;
 
@@ -125,26 +134,41 @@ export class Tail extends EventEmitter {
         }
     }
 
-    /** Returns `undefined` on error. */
-    #getCurrentFilePos() {
-        try {
-            return fs.statSync(this.#filename).size;
-        } catch (error) { /* node:coverage ignore next 2 */
-            this.#lostFile(error);
-        }
-    }
-
     #readBlock() {
         if (this.#queue.length === 0) return;
 
         const block = this.#queue[0];
-        if (block.end <= block.start) return;
+        if (block.end <= block.start) { /* node:coverage ignore next 4 */
+            this.#queue.shift();
+            if (this.#queue.length > 0) this.#internalDispatcher.emit('next');
+            return;
+        }
 
         const stream = fs.createReadStream(this.#filename, {
             start: block.start,
             end: block.end - 1,
         });
-        stream.on('error', (error) => this.emit('error', new Error('ReadStream error', { cause: error })));
+        stream.on('data', (d) => {
+            const chunk = d as Buffer;
+            this.#buffer = this.#buffer.length === 0 ? chunk : Buffer.concat([this.#buffer, chunk]);
+
+            let pos = 0;
+            while (true) {
+                const LF = this.#buffer.indexOf(0x0A, pos); // 0x0A = \n
+                if (LF === -1) break;
+
+                // Handle CRLF: check if the character before \n is \r (0x0D)
+                let end = LF;
+                if (end > pos && this.#buffer[end - 1] === 0x0D) end--;
+
+                // Convert only the confirmed line to a string
+                const line = this.#buffer.toString('utf8', pos, end);
+                this.emit('line', line);
+                pos = LF + 1;
+            }
+            // Keep only the trailing partial line in the class buffer
+            if (pos > 0) this.#buffer = this.#buffer.subarray(pos);
+        });
         stream.on('end', () => {
             this.#queue.shift();
             if (this.#queue.length > 0) this.#internalDispatcher.emit('next');
@@ -154,29 +178,7 @@ export class Tail extends EventEmitter {
                 this.#buffer = Buffer.alloc(0);
             }
         });
-        stream.on('data', (d) => {
-            const chunk = d as Buffer;
-            this.#buffer = Buffer.concat([this.#buffer, chunk]);
-
-            let start = 0;
-            while (true) {
-                const idx = this.#buffer.indexOf(0x0A, start); // 0x0A = \n
-                if (idx === -1) break;
-
-                // Handle CRLF: check if the character before \n is \r (0x0D)
-                let end = idx;
-                if (end > start && this.#buffer[end - 1] === 0x0D) end--;
-
-                // Convert only the confirmed line to a string
-                const line = this.#buffer.toString('utf8', start, end);
-                this.emit('line', line);
-
-                start = idx + 1;
-            }
-            // Keep only the trailing partial line in the class buffer
-            if (start > 0) this.#buffer = this.#buffer.subarray(start);
-        });
-
+        stream.on('error', (error) => this.emit('error', new Error('ReadStream error', { cause: error })));
     }
 
     #change(newPos?: number) {
