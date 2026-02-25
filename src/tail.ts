@@ -95,8 +95,9 @@ export class Tail extends EventEmitter {
     #getCurrentFilePos() {
         try {
             return fs.fstatSync(this.#fd).size;
-        } catch (error) { /* node:coverage ignore next 2 */
+        } catch (error) { /* node:coverage ignore next 3 */
             this.#lostFile(error);
+            return;
         }
     }
 
@@ -140,7 +141,7 @@ export class Tail extends EventEmitter {
     #readBlock() {
         if (this.#queue.length === 0) return;
 
-        const block = this.#queue[0];
+        const block = this.#queue[0]!;
         if (block.end <= block.start) return;
 
         const stream = fs.createReadStream('', {
@@ -223,7 +224,7 @@ export class Tail extends EventEmitter {
         if (this.#watcher) this.#watcher.close();
         else fs.unwatchFile(this.#filename);
 
-        try { fs.closeSync(this.#fd); } catch {}
+        try { fs.closeSync(this.#fd); } catch { /* suppress */ }
 
         this.#internalDispatcher.removeAllListeners();
         this.#buffer = Buffer.alloc(0);
