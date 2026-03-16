@@ -43,8 +43,11 @@ export class Tail extends EventEmitter {
     #currentCursorPos: number = 0;
     #unwatched: boolean = false;
 
-    // Default to native watchers on Windows, macOS and Linux, default to polling on other platforms.
-    static #POLLING_PREFERRED = process.platform !== 'win32' && process.platform !== 'darwin' && process.platform !== 'linux';
+    // Default to native watchers on macOS and Linux, default to polling on other platforms.
+    // Windows native file watching has proven itself to be very unreliable, as expected of Microslop.
+    // macOS and Linux native watchers have been tested to function well as of 2026.
+    // Other platforms default to polling out of caution from being untested.
+    static #POLLING_PREFERRED = process.platform !== 'darwin' && process.platform !== 'linux';
 
     constructor(filename: string, options: TailOptions = {}) {
         super();
